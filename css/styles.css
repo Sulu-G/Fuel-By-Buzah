@@ -53,6 +53,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; }
 body {
   background: var(--bg);
@@ -257,6 +258,7 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
   background: var(--accent); color: var(--accent-ink);
 }
 .btn:hover { filter: brightness(1.05); }
+a.btn { text-decoration: none; }
 .btn-ghost { background: var(--surface); color: var(--text); border-color: var(--border); }
 .btn-ghost:hover { background: var(--surface-2); filter: none; }
 .btn-danger { background: var(--surface); color: var(--bad); border-color: var(--border); }
@@ -286,6 +288,28 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
 .receipt-head .biz { font-size: 1.3rem; font-weight: 800; }
 .receipt-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; font-size: 0.9rem; }
 .receipt-meta div span { display: block; color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 650; }
+
+/* ---------- Online orders (v2) ---------- */
+.tab-badge {
+  display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px;
+  margin-left: 4px; border-radius: 999px; background: var(--accent); color: var(--accent-ink);
+  font-size: 0.7rem; font-weight: 800; vertical-align: 1px;
+}
+.badge.online { background: var(--surface-2); color: var(--carbs); }
+.badge.paid { background: var(--good-soft); color: var(--good); }
+button.badge { border: 0; font: inherit; font-size: 0.75rem; font-weight: 650; cursor: pointer; }
+button.badge:hover { filter: brightness(0.95); }
+.banner.inbox-banner { background: var(--accent-soft); color: var(--accent); }
+.inbox { border-color: var(--accent); }
+.inbox-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--surface); min-width: 0; }
+.inbox-card h3 { margin: 0; }
+.inbox-card .price { font-weight: 800; font-size: 1.1rem; }
+.inbox-items { margin: 4px 0 8px; padding-left: 18px; font-size: 0.9rem; }
+.warn-text { color: var(--warn); font-weight: 600; margin-top: 4px; }
+.link-box { display: flex; gap: 6px; }
+.link-box input { flex: 1; min-width: 0; font-size: 0.85rem; }
+label.check { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; font-weight: 600; color: var(--text); cursor: pointer; }
+label.check input { accent-color: var(--accent); width: 16px; height: 16px; }
 
 /* ---------- Sync status & auth ---------- */
 .sync-pill {

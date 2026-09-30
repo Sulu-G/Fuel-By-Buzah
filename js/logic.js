@@ -258,7 +258,20 @@
     const rows = orders.map((o) => {
       const c = customersById.get(o.customerId) || { name: "Unknown customer", address: "", phone: "" };
       const t = orderTotals(o, menuById, settings);
-      return { orderId: o.id, customer: c.name, address: c.address, phone: c.phone, meals: t.mealCount, total: t.total, notes: o.notes || "", fulfillment: o.fulfillment };
+      const ct = o.contact || {};
+      return {
+        orderId: o.id,
+        customer: c.name,
+        // Online orders keep the address the customer typed for that order.
+        address: (o.fulfillment === "delivery" && ct.address) || c.address,
+        phone: ct.phone || c.phone,
+        meals: t.mealCount,
+        total: t.total,
+        notes: o.notes || "",
+        fulfillment: o.fulfillment,
+        paid: !!o.paid,
+        paymentMethod: o.paymentMethod || "",
+      };
     });
     return {
       delivery: rows.filter((r) => r.fulfillment === "delivery").sort((a, b) => a.address.localeCompare(b.address)),

@@ -98,8 +98,16 @@
   /** Reload everything from the store (used for live sync and error recovery). */
   async function refresh() {
     if (!store || store.mode !== "cloud" || !ui.user) return;
+    const knownPending = new Set((db ? db.orders : []).filter((o) => o.status === "pending").map((o) => o.id));
+    const before = signature(db);
     try {
       db = await store.loadAll();
+      if (signature(db) === before) { setSync("saved"); return; } // just the echo of our own save
+      const fresh = db.orders.filter((o) => o.status === "pending" && !knownPending.has(o.id));
+      if (fresh.length) {
+        const who = (fresh[0].contact && fresh[0].contact.name) || "a customer";
+        toast(fresh.length === 1 ? `New online order from ${who}!` : `${fresh.length} new online orders!`);
+      }
       setSync("saved");
     } catch (err) {
       setSync("offline");
@@ -114,25 +122,39 @@
     render();
   }
 
+  /** Order-independent fingerprint of the data, to tell real changes from echoes of our own saves. */
+  function signature(d) {
+    if (!d) return "";
+    const byId = (list) => [...list].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    return JSON.stringify([d.settings, byId(d.menu), byId(d.customers), byId(d.orders)]);
+  }
+
   let remoteTimer;
   function onRemoteChange() {
     clearTimeout(remoteTimer);
+    // Wait until our own in-flight saves settle, then reload. Never drop an
+    // event: a customer's order can land a split second after we save.
+    const wait = Math.max(500, 1500 - (Date.now() - lastWriteAt));
     remoteTimer = setTimeout(() => {
-      // Ignore the echo of our own writes.
-      if (pendingWrites > 0 || Date.now() - lastWriteAt < 1500) return;
+      if (pendingWrites > 0) return onRemoteChange();
       refresh();
-    }, 500);
+    }, wait);
   }
 
   function newDraft() {
-    return { customerId: "", createdOn: today(), qty: {}, fulfillment: "delivery", notes: "" };
+    return { customerId: "", createdOn: today(), qty: {}, fulfillment: "delivery", notes: "", paymentMethod: "" };
   }
+
+  /** Only confirmed orders count toward prep, deliveries and revenue. */
+  const isConfirmed = (o) => !o.status || o.status === "confirmed";
+  const PAYMENT_LABELS = { cash: "Cash", cashapp: "Cash App", zelle: "Zelle" };
 
   function ctx() {
     const menuById = L.indexById(db.menu);
     const customersById = L.indexById(db.customers);
-    const weekOrders = db.orders.filter((o) => o.weekOf === ui.weekOf).sort((a, b) => a.createdOn.localeCompare(b.createdOn));
-    return { menuById, customersById, weekOrders, s: db.settings };
+    const weekOrders = db.orders.filter((o) => o.weekOf === ui.weekOf && isConfirmed(o)).sort((a, b) => a.createdOn.localeCompare(b.createdOn));
+    const pendingOrders = db.orders.filter((o) => o.status === "pending").sort((a, b) => a.createdOn.localeCompare(b.createdOn));
+    return { menuById, customersById, weekOrders, pendingOrders, s: db.settings };
   }
 
   const activeMeals = () => db.menu.filter((m) => m.active !== false);
@@ -187,6 +209,93 @@
       ${orderBtn}`;
   }
 
+  function pendingCount() {
+    return db ? db.orders.filter((o) => o.status === "pending").length : 0;
+  }
+
+  const normAddr = (a) => String(a || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  /** "New online orders" inbox shown above the Orders tab. */
+  function pendingInbox() {
+    const { menuById, customersById, pendingOrders, s } = ctx();
+    if (!pendingOrders.length) return "";
+    return `
+      <section class="card inbox" style="margin-bottom:16px">
+        <div class="card-head"><h2>New online orders</h2><span class="badge late">${pendingOrders.length} waiting</span></div>
+        <p class="muted small" style="margin-top:-4px">Confirm to add an order to prep and deliveries. Remember to text the customer to let them know.</p>
+        <div class="grid grid-cards">
+        ${pendingOrders.map((o) => {
+          const t = L.orderTotals(o, menuById, s);
+          const c = customersById.get(o.customerId);
+          const ct = o.contact || {};
+          const name = ct.name || (c && c.name) || "Unknown";
+          const phone = ct.phone || (c && c.phone) || "";
+          const addr = o.fulfillment === "delivery" ? ct.address || (c && c.address) || "" : "";
+          const addrDiffers = o.fulfillment === "delivery" && c && c.address && ct.address && normAddr(c.address) !== normAddr(ct.address);
+          const priceChanged = o.quotedTotal != null && Math.abs(o.quotedTotal - t.total) > 0.009;
+          return `
+          <article class="inbox-card">
+            <div class="card-head">
+              <div><h3>${esc(name)}</h3><div class="muted small">${esc(phone)} · placed ${shortDate(o.createdOn)}</div></div>
+              <div class="price num">${money(t.total)}</div>
+            </div>
+            <ul class="inbox-items">${t.lines.map((l) => `<li><strong>${l.qty}×</strong> ${esc(l.name)}</li>`).join("")}</ul>
+            <div class="small" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">${fulfillmentBadges(o)} <span class="badge">${esc(PAYMENT_LABELS[o.paymentMethod] || "No payment method")}</span> <span class="badge">for ${longDate(L.weekSchedule(o.weekOf).deliveryDay)}</span></div>
+            ${addr ? `<div class="small"><span class="muted">Deliver to:</span> ${esc(addr)}</div>` : ""}
+            ${addrDiffers ? `<div class="small warn-text">Different from the address on file (${esc(c.address)}).</div>` : ""}
+            ${o.notes ? `<div class="small"><span class="muted">Notes:</span> ${esc(o.notes)}</div>` : ""}
+            ${priceChanged ? `<div class="small warn-text">They were quoted ${money(o.quotedTotal)}. Your prices changed since then.</div>` : ""}
+            <div class="btn-row" style="margin-top:10px">
+              <button class="btn btn-sm" data-action="confirm-order" data-id="${o.id}">Confirm</button>
+              <button class="btn btn-ghost btn-sm" data-action="decline-order" data-id="${o.id}">Decline</button>
+              <button class="btn btn-ghost btn-sm" data-action="invoice" data-id="${o.id}">Details</button>
+            </div>
+          </article>`;
+        }).join("")}
+        </div>
+      </section>`;
+  }
+
+  /** Settings card: public ordering link, open/closed, payment handles. */
+  function onlineOrderingCard() {
+    const s = db.settings;
+    if (!store || store.mode !== "cloud") {
+      return `
+        <section class="card">
+          <div class="card-head"><h2>Online ordering</h2></div>
+          <p class="muted">Customers can order from a public link, and orders land here for you to confirm. This needs your cloud database, so sign in to set it up.</p>
+          <a class="btn btn-ghost" href="order.html?demo" target="_blank" rel="noopener">Preview the customer page (demo)</a>
+        </section>`;
+    }
+    const link = ui.shopSlug ? new URL(`order.html?shop=${encodeURIComponent(ui.shopSlug)}`, location.href).href : "";
+    return `
+      <section class="card">
+        <div class="card-head"><h2>Online ordering</h2>${s.orderingOpen === false ? '<span class="badge late">Closed</span>' : ui.shopSlug ? '<span class="badge pickup">Live</span>' : ""}</div>
+        <form data-form="ordering" novalidate>
+          ${errorBox("ordering")}
+          <div class="field">
+            <label for="sh-slug">Your link name</label>
+            <input type="text" id="sh-slug" name="slug" value="${esc(ui.shopSlug || "")}" placeholder="fuel-by-buzah" autocomplete="off" />
+            <span class="small muted">Lowercase letters, numbers and dashes.</span>
+          </div>
+          ${link ? `
+          <div class="field">
+            <span class="label-text">Share this link with customers</span>
+            <div class="link-box"><input type="text" readonly value="${esc(link)}" id="shop-link" aria-label="Ordering link" />
+              <button class="btn btn-ghost btn-sm" type="button" data-action="copy-link">Copy</button>
+              <a class="btn btn-ghost btn-sm" href="${esc(link)}" target="_blank" rel="noopener">Open</a></div>
+          </div>` : ""}
+          <label class="check"><input type="checkbox" name="orderingOpen" ${s.orderingOpen !== false ? "checked" : ""}/> Accepting online orders</label>
+          <div class="row" style="margin-top:12px">
+            <div class="field"><label for="sh-cashapp">Cash App $cashtag</label><input type="text" id="sh-cashapp" name="cashApp" value="${esc(s.cashApp || "")}" placeholder="$YourCashtag" /></div>
+            <div class="field"><label for="sh-zelle">Zelle phone or email</label><input type="text" id="sh-zelle" name="zelle" value="${esc(s.zelle || "")}" /></div>
+          </div>
+          <label class="check"><input type="checkbox" name="acceptCash" ${s.acceptCash !== false ? "checked" : ""}/> Accept cash at pickup/delivery</label>
+          <div class="btn-row" style="margin-top:12px"><button class="btn" type="submit">Save online ordering</button></div>
+        </form>
+      </section>`;
+  }
+
   function errorBox(key) {
     const errs = ui.errors[key];
     if (!errs || !errs.length) return "";
@@ -214,6 +323,7 @@
 
       return `
       ${windowBanner({ ...win, message: `Today (${longDate(today())}): ${win.message}` })}
+      ${pendingCount() ? `<div class="banner inbox-banner"><span class="dot"></span><span><strong>${pendingCount()} new online order${pendingCount() > 1 ? "s" : ""}</strong> waiting for you to confirm.</span><button class="btn btn-sm" data-action="goto" data-to="orders" style="margin-left:auto">Review</button></div>` : ""}
       <div class="stats">
         <div class="card stat"><div class="label">Orders</div><div class="value">${sum.orders}</div><div class="hint">${sum.deliveries} delivery · ${sum.pickups} pickup</div></div>
         <div class="card stat"><div class="label">Meals to cook</div><div class="value">${sum.meals}</div><div class="hint">${counts.length} different meals</div></div>
@@ -261,7 +371,8 @@
           <td><strong>${esc(c ? c.name : "Unknown")}</strong>${o.notes ? `<div class="muted small">${esc(o.notes)}</div>` : ""}</td>
           <td>${shortDate(o.createdOn)}</td>
           <td class="num">${t.mealCount}</td>
-          <td>${fulfillmentBadges(o)}</td>
+          <td>${fulfillmentBadges(o)}${o.source === "online" ? ' <span class="badge online">Online</span>' : ""}</td>
+          <td><button class="badge pay-toggle ${o.paid ? "paid" : ""}" data-action="toggle-paid" data-id="${o.id}" title="Click to mark ${o.paid ? "unpaid" : "paid"}">${o.paid ? "Paid" : "Unpaid"}${PAYMENT_LABELS[o.paymentMethod] ? ` · ${PAYMENT_LABELS[o.paymentMethod]}` : ""}</button></td>
           <td class="right num">${money(t.total)}</td>
           <td class="actions">
             <button class="btn btn-ghost btn-sm" data-action="invoice" data-id="${o.id}">Invoice</button>
@@ -270,6 +381,7 @@
       }).join("");
 
       return `
+      ${pendingInbox()}
       <div class="split">
         <section class="card">
           <div class="card-head"><h2>New order</h2></div>
@@ -306,6 +418,13 @@
               </div>
             </div>
             <div class="field">
+              <label for="o-pay">Payment method <span class="muted">(optional)</span></label>
+              <select id="o-pay" name="paymentMethod">
+                <option value="">Not decided</option>
+                ${Object.entries(PAYMENT_LABELS).map(([k, v]) => `<option value="${k}" ${d.paymentMethod === k ? "selected" : ""}>${v}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field">
               <label for="o-notes">Notes</label>
               <input type="text" id="o-notes" name="notes" value="${esc(d.notes)}" placeholder="Allergies, gate code, swaps…" />
             </div>
@@ -319,9 +438,9 @@
         <section class="card">
           <div class="card-head"><h2>Orders · week of ${shortDate(ui.weekOf)}</h2><span class="badge">${weekOrders.length}</span></div>
           ${weekOrders.length ? `<div class="table-wrap"><table>
-            <thead><tr><th>Customer</th><th>Placed</th><th>Meals</th><th>Type</th><th class="right">Total</th><th></th></tr></thead>
+            <thead><tr><th>Customer</th><th>Placed</th><th>Meals</th><th>Type</th><th>Payment</th><th class="right">Total</th><th></th></tr></thead>
             <tbody>${rows}</tbody>
-            <tfoot><tr><td colspan="4">Week total</td><td class="right num">${money(tableTotal)}</td><td></td></tr></tfoot>
+            <tfoot><tr><td colspan="5">Week total</td><td class="right num">${money(tableTotal)}</td><td></td></tr></tfoot>
           </table></div>` : `<div class="empty">No orders for this week yet.</div>`}
         </section>
       </div>`;
@@ -495,6 +614,7 @@
         `<button class="btn btn-danger" type="button" data-action="${action}">${ui.confirming === action ? confirmLabel : label}</button>`;
       return `
       <div class="grid grid-2">
+        ${onlineOrderingCard()}
         <section class="card">
           <div class="card-head"><h2>Business &amp; pricing</h2></div>
           <form data-form="settings" novalidate>
@@ -583,6 +703,10 @@
       fulfillment: d.fulfillment,
       notes: d.notes.trim(),
       lateFee: win.lateFee,
+      status: "confirmed",
+      source: "manager",
+      paymentMethod: d.paymentMethod || "",
+      paid: false,
     };
   }
 
@@ -598,6 +722,7 @@
       qty,
       fulfillment: fd.get("fulfillment") || "delivery",
       notes: fd.get("notes") || "",
+      paymentMethod: fd.get("paymentMethod") || "",
     };
   }
 
@@ -618,6 +743,8 @@
         <div><span>Bill to</span>${esc(c.name)}${c.phone ? `<br>${esc(c.phone)}` : ""}</div>
         <div><span>${o.fulfillment === "delivery" ? "Deliver to" : "Pickup"}</span>${o.fulfillment === "delivery" ? esc(c.address || "Address needed") : "Customer pickup"}</div>
         <div><span>Ready on</span>${longDate(L.weekSchedule(o.weekOf).deliveryDay)}</div>
+        <div><span>Payment</span>${o.paid ? "<strong>Paid</strong>" : "Unpaid"}${PAYMENT_LABELS[o.paymentMethod] ? ` · ${PAYMENT_LABELS[o.paymentMethod]}` : ""}</div>
+        ${o.status === "pending" ? `<div><span>Status</span>Waiting for your confirmation</div>` : ""}
       </div>
       <div class="table-wrap"><table>
         <thead><tr><th>Meal</th><th class="right">Qty</th><th class="right">Price</th><th class="right">Amount</th></tr></thead>
@@ -676,6 +803,10 @@
       else b.removeAttribute("aria-current");
     });
     setSync(ui.sync === "idle" ? "saved" : ui.sync);
+    const n = pendingCount();
+    const ordersTab = $('#tabs [data-tab="orders"]');
+    if (ordersTab) ordersTab.innerHTML = `Orders${n ? ` <span class="tab-badge" aria-label="${n} new">${n}</span>` : ""}`;
+    document.title = `${n ? `(${n}) ` : ""}${db.settings.businessName || "Fuel by Buzah"} — Meal Prep Manager`;
     $("#app").innerHTML = ui.onboarding ? onboardingView() : views[ui.tab]();
   }
 
@@ -698,6 +829,7 @@
         <div class="auth-divider"><span>or</span></div>
         <button class="btn btn-ghost" style="width:100%" data-action="use-demo">Explore the demo</button>
         <p class="small muted" style="margin-top:10px">The demo runs on sample data saved only in your browser. Nothing is sent to the database.</p>
+        <a class="btn btn-ghost" style="width:100%;margin-top:6px" href="order.html?demo">See the customer ordering page</a>
       </section>`;
     const email = $("#l-email");
     if (email) email.focus();
@@ -796,6 +928,41 @@
     },
 
     "edit-customer": (el) => { ui.editCustomerId = el.dataset.id; ui.customerDraft = null; ui.errors = {}; render(); $("#c-name").focus(); },
+    "confirm-order": (el) => {
+      const o = db.orders.find((x) => x.id === el.dataset.id);
+      if (!o) return;
+      o.status = "confirmed";
+      render();
+      persist({ type: "upsert", kind: "orders", row: o });
+      const name = (o.contact && o.contact.name) || "Order";
+      toast(o.weekOf === ui.weekOf ? `${name}'s order confirmed.` : `${name}'s order confirmed for the week of ${shortDate(o.weekOf)}.`);
+    },
+    "decline-order": (el) => {
+      const o = db.orders.find((x) => x.id === el.dataset.id);
+      if (!o) return;
+      o.status = "declined";
+      render();
+      persist({ type: "upsert", kind: "orders", row: o });
+      toast("Order declined.", () => {
+        o.status = "pending";
+        render();
+        persist({ type: "upsert", kind: "orders", row: o });
+      });
+    },
+    "toggle-paid": (el) => {
+      const o = db.orders.find((x) => x.id === el.dataset.id);
+      if (!o) return;
+      o.paid = !o.paid;
+      render();
+      persist({ type: "upsert", kind: "orders", row: o });
+    },
+    "copy-link": () => {
+      const input = $("#shop-link");
+      if (!input) return;
+      const done = () => toast("Link copied.");
+      if (navigator.clipboard) navigator.clipboard.writeText(input.value).then(done, () => { input.select(); document.execCommand("copy"); done(); });
+      else { input.select(); document.execCommand("copy"); done(); }
+    },
     "order-for": (el) => {
       ui.orderDraft = { ...newDraft(), customerId: el.dataset.id };
       setTab("orders");
@@ -960,6 +1127,32 @@
       persist({ type: "settings", settings: db.settings }).then((ok) => ok && toast("Settings saved."));
     },
 
+    async ordering(form) {
+      const fd = new FormData(form);
+      const slug = String(fd.get("slug") || "").trim().toLowerCase();
+      let cashApp = String(fd.get("cashApp") || "").trim().replace(/\s+/g, "");
+      if (cashApp && !cashApp.startsWith("$")) cashApp = "$" + cashApp;
+      const zelle = String(fd.get("zelle") || "").trim();
+      const acceptCash = fd.get("acceptCash") === "on";
+      const errs = [];
+      if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(slug)) errs.push("Link name: use 3–40 lowercase letters, numbers or dashes (e.g. fuel-by-buzah).");
+      if (!cashApp && !zelle && !acceptCash) errs.push("Turn on at least one way to pay.");
+      if (errs.length) { ui.errors.ordering = errs; return render(); }
+      ui.errors = {};
+      if (slug !== ui.shopSlug) {
+        try {
+          await store.saveShop(slug);
+          ui.shopSlug = slug;
+        } catch (err) {
+          ui.errors.ordering = [err.message];
+          return render();
+        }
+      }
+      db.settings = { ...db.settings, orderingOpen: fd.get("orderingOpen") === "on", cashApp, zelle, acceptCash };
+      render();
+      persist({ type: "settings", settings: db.settings }).then((ok) => ok && toast("Online ordering saved."));
+    },
+
     async login(form) {
       const fd = new FormData(form);
       const btn = form.querySelector("button[type=submit]");
@@ -1044,6 +1237,7 @@
       return;
     }
     ui.weekOf = L.orderWindow(today(), db.settings).weekOf;
+    ui.shopSlug = store.getShop ? await store.getShop().catch(() => "") : "";
     ui.onboarding = S.isEmpty(db) && !db.settingsSaved;
     ui.sync = "saved";
     store.subscribe(onRemoteChange);
@@ -1057,7 +1251,7 @@
     const cloudReady = ui.cloudAvailable && lib && typeof lib.createClient === "function";
 
     if (cloudReady && getPref() !== "demo") {
-      store = S.createCloudStore(cfg, lib, seed().settings);
+      store = S.createCloudStore(cfg, lib, window.FuelSeed.defaultSettings());
       store.onAuthChange((event) => {
         if (event === "SIGNED_OUT" && ui.user) showLogin("You've been signed out.");
       });

@@ -8,8 +8,9 @@
 
   const ing = (line) => L.parseIngredientLine(line);
 
-  function buildDemoData(todayISO) {
-    const settings = {
+  /** Defaults for a brand-new account (no payment handles filled in). */
+  function defaultSettings() {
+    return {
       businessName: "Fuel by Buzah",
       tagline: "Fitness-friendly meal prep, delivered Sunday",
       deliveryFee: 5,
@@ -18,7 +19,15 @@
       lateOrders: "fee",
       lateFee: 7.5,
       macroDays: 5,
+      orderingOpen: true,
+      acceptCash: true,
+      cashApp: "",
+      zelle: "",
     };
+  }
+
+  function buildDemoData(todayISO) {
+    const settings = { ...defaultSettings(), cashApp: "$FuelByBuzahDemo", zelle: "demo@fuelbybuzah.com" };
 
     const menu = [
       {
@@ -75,7 +84,7 @@
 
     const weekOf = L.orderWindow(todayISO, settings).weekOf;
     const day = (n) => L.addDays(weekOf, n);
-    const order = (id, customerId, createdOn, items, fulfillment, notes, lateFee) => ({
+    const order = (id, customerId, createdOn, items, fulfillment, notes, lateFee, extra) => ({
       id,
       customerId,
       createdOn,
@@ -84,6 +93,11 @@
       fulfillment,
       notes: notes || "",
       lateFee: lateFee || 0,
+      status: "confirmed",
+      source: "manager",
+      paymentMethod: "",
+      paid: false,
+      ...(extra || {}),
     });
 
     const orders = [
@@ -92,10 +106,19 @@
       order("ord_1003", "cust_priya", day(1), [{ mealId: "meal_salmon", qty: 3 }, { mealId: "meal_shrimp_pasta", qty: 2 }], "delivery", "No spice on shrimp"),
       order("ord_1004", "cust_marcus", day(2), [{ mealId: "meal_chicken_rice", qty: 7 }, { mealId: "meal_oats", qty: 7 }], "pickup", ""),
       order("ord_1005", "cust_tasha", day(4), [{ mealId: "meal_turkey_bowl", qty: 3 }, { mealId: "meal_chicken_rice", qty: 2 }], "delivery", "Friday order", settings.lateFee),
+      // An online order waiting for approval, so the "New orders" inbox has something to show.
+      order("web_demo01", "cust_jordan", day(2), [{ mealId: "meal_chicken_rice", qty: 3 }, { mealId: "meal_oats", qty: 3 }], "delivery", "Can you do extra broccoli?", 0, {
+        status: "pending",
+        source: "online",
+        paymentMethod: "cashapp",
+        quotedTotal: 62,
+        contact: { name: "Jordan Brooks", phone: "(281) 555-0188", phoneDigits: "2815550188", address: "900 Gessner Rd, Houston TX" },
+      }),
     ];
+    customers.push({ id: "cust_jordan", name: "Jordan Brooks", phone: "(281) 555-0188", address: "900 Gessner Rd, Houston TX", targets: { cal: 2400, protein: 180, carbs: 240, fat: 75 } });
 
     return { version: 1, settings, menu, customers, orders };
   }
 
-  root.FuelSeed = { buildDemoData };
+  root.FuelSeed = { buildDemoData, defaultSettings };
 })(typeof self !== "undefined" ? self : this);

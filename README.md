@@ -1,6 +1,9 @@
 # Fuel by Buzah — Meal Prep Manager
 
-A browser app for running a small weekly meal-prep business. It covers taking orders, tracking each customer's macros, building Saturday's shopping list, planning Sunday's deliveries and printing invoices.
+A web app for running a small weekly meal-prep business. It has two sides:
+
+- **The manager** (`index.html`) is for the owner: orders, macros, Saturday's shopping list, Sunday's deliveries and invoices.
+- **The ordering page** (`order.html`) is for customers: they build their week of meals, see their macros and place an order, which lands in the manager for the owner to confirm.
 
 Built with **vanilla HTML, CSS and JavaScript** on the front end and **Supabase** (Postgres, Auth, Realtime) for cloud sync. There is no framework and no build step. It deploys free on GitHub Pages.
 
@@ -34,6 +37,32 @@ Spreadsheets got messy fast, so I built a tool that follows this cycle directly.
 - **Backups.** Export and import JSON anytime.
 - **Responsive, with dark mode.** Works on a phone at the stove or a laptop at the desk.
 
+## Online ordering (v2)
+
+| Customer ordering page | Order confirmation | New orders inbox (manager) |
+|---|---|---|
+| ![Order page](docs/screenshot-shop-mobile.png) | ![Confirmation](docs/screenshot-shop-confirm.png) | ![Inbox](docs/screenshot-inbox.png) |
+
+- **Shareable link.** Each shop gets `order.html?shop=<name>`, with an open/closed switch in Settings.
+- **Customers see macros as they shop.** Totals and per-day averages are shown, and customers can enter daily goals to compare against. Those goals fill in their macro targets in the manager.
+- **Owner approval.** Online orders arrive as *pending*, with a live alert, a tab badge and a count in the browser tab. The owner confirms or declines each one, and only confirmed orders count toward prep, deliveries and revenue.
+- **Payments outside the app.** Customers pick Cash App, Zelle or cash, and the confirmation screen shows the owner's handle plus an order reference for the note. The manager has a Paid toggle on every order.
+- **Returning customers are matched by phone number**, whatever the formatting. A public form can never overwrite a customer's saved details; it only fills in blanks.
+- **Try it:** open `order.html?demo` for a demo that sends nothing.
+
+### How the ordering page stays secure
+
+Customers never get table access. The public page can call exactly two Postgres functions (`supabase/v2_online_ordering.sql`):
+
+| Function | What it does |
+|---|---|
+| `get_shop(slug)` | Returns the active menu (names, prices, macros, but no ingredients or costs), fees and payment handles |
+| `place_order(slug, order)` | Validates everything, **re-prices the order on the server** so a tampered browser can't change the total, applies the order-window rules in the shop's time zone, matches or creates the customer, and inserts a **pending** order |
+
+Validation covers name, phone, address, allowed payment methods, whole quantities from 1 to 50, active meals from this shop only, no duplicate lines, and a maximum of 60 meals. There are also spam guards: at most 3 pending orders per phone and 100 per shop, plus a hidden honeypot field. The order-window rule lives in a private schema (`fuel_private`) that the public API can't reach.
+
+The SQL is covered by 42 tests. They include parity checks showing the database computes the **same week and the same total as `js/logic.js`** across 42 day/policy combinations and 40 randomized orders.
+
 ## Screenshots
 
 | Orders + live preview | Invoice |
@@ -55,11 +84,11 @@ How it works:
 - Primary keys are `(owner_id, id)`, so two accounts can never collide on IDs.
 - A composite foreign key stops an order from pointing at a customer that doesn't exist, or at another account's customer.
 - Saves are **optimistic**: the UI updates instantly and writes in the background. If a write fails, the app warns you and reloads the true state from the database.
-- **Realtime** subscriptions keep devices in sync. An incoming update never wipes a form you're halfway through typing.
+- **Realtime** subscriptions keep devices in sync. An incoming update never wipes a form you're halfway through typing. Every remote event triggers a reload, and the page only re-renders when the data actually changed, so a customer order that lands a split second after the owner saves something is never dropped.
 
 To use your own Supabase project:
 
-1. Run `supabase/schema.sql` in the Supabase SQL Editor.
+1. Run `supabase/schema.sql`, then `supabase/v2_online_ordering.sql`, in the Supabase SQL Editor. Both are safe to re-run.
 2. Create your login under **Authentication → Users → Add user**, then turn off public sign-ups.
 3. Put your project URL and **publishable** key in `js/config.js`. Never use a secret or service-role key there.
 
@@ -90,14 +119,18 @@ The tests run automatically on every push via GitHub Actions.
 ## Project structure
 
 ```
-index.html            App shell
+index.html            Manager app shell
+order.html            Customer ordering page
 css/styles.css        Styles (CSS variables, light/dark, print styles)
+css/order.css         Ordering page styles
 js/logic.js           Pure business logic — used by the browser and by Node tests
 js/seed.js            Demo data
 js/store.js           Storage layer: LocalStore (browser) + CloudStore (Supabase)
 js/config.js          Supabase URL + publishable key
-js/app.js             UI: rendering, events, login, live sync
+js/app.js             Manager UI: rendering, events, login, live sync, order inbox
+js/order.js           Ordering page: menu, cart, macros, checkout
 supabase/schema.sql   Tables, Row Level Security policies, realtime
+supabase/v2_online_ordering.sql   Shops, order status/payments, public order functions
 tests/                Unit tests (node --test)
 ```
 
@@ -117,7 +150,8 @@ Design choices:
 
 ## Roadmap
 
-- Customer-facing order form (shareable link) that writes into the same database
+- Text/email alerts for new orders (Supabase Edge Function + Twilio)
+- Card payments with Stripe Checkout
 - Weekly revenue history chart
 - Route optimization for deliveries
 

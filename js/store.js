@@ -52,6 +52,12 @@
       fulfillment: o.fulfillment,
       notes: o.notes || "",
       late_fee: o.lateFee || 0,
+      status: o.status || "confirmed",
+      source: o.source || "manager",
+      payment_method: o.paymentMethod || "",
+      paid: !!o.paid,
+      quoted_total: o.quotedTotal == null ? null : o.quotedTotal,
+      contact: o.contact || {},
     }),
   };
 
@@ -80,6 +86,12 @@
       fulfillment: r.fulfillment,
       notes: r.notes || "",
       lateFee: Number(r.late_fee) || 0,
+      status: r.status || "confirmed",
+      source: r.source || "manager",
+      paymentMethod: r.payment_method || "",
+      paid: !!r.paid,
+      quotedTotal: r.quoted_total == null ? null : Number(r.quoted_total),
+      contact: r.contact || {},
     }),
   };
 
@@ -210,6 +222,22 @@
           if (op.db.menu.length) check(await sb.from("meals").insert(op.db.menu.map(toRow.meals)));
           if (op.db.customers.length) check(await sb.from("customers").insert(op.db.customers.map(toRow.customers)));
           if (op.db.orders.length) check(await sb.from("orders").insert(op.db.orders.map(toRow.orders)));
+        }
+      },
+
+      /** Your public ordering link slug, or "" if not set yet. */
+      async getShop() {
+        const res = await sb.from("shops").select("slug").maybeSingle();
+        check(res);
+        return res.data ? res.data.slug : "";
+      },
+
+      async saveShop(slug) {
+        const res = await sb.from("shops").upsert({ slug }, { onConflict: "owner_id" });
+        if (res.error) {
+          if (/duplicate|unique/i.test(res.error.message)) throw new Error("That link name is taken. Try another.");
+          if (/check/i.test(res.error.message)) throw new Error("Use 3–40 lowercase letters, numbers or dashes.");
+          throw new Error(res.error.message);
         }
       },
 

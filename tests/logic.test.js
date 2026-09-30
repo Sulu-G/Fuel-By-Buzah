@@ -165,3 +165,10 @@ test("round2 avoids float drift", () => {
   assert.equal(L.round2(1.005), 1.01);
   assert.equal(L.round2(0.1 + 0.2), 0.3);
 });
+
+test("delivery sheet uses the address typed on an online order", () => {
+  const orders = [{ id: "w1", customerId: "c1", items: [{ mealId: "m1", qty: 1 }], fulfillment: "delivery", contact: { address: "9 New Rd", phone: "555" } }];
+  const sheet = L.fulfillmentSheet(orders, customersById, menuById, settings);
+  assert.equal(sheet.delivery[0].address, "9 New Rd");
+  assert.equal(sheet.delivery[0].phone, "555");
+});

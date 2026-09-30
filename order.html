@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Order your meal prep</title>
+  <meta name="description" content="Order this week's fitness-friendly meal prep: pick your meals, see your macros, choose delivery or pickup." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23e4572e'/><path d='M58 12 28 56h20l-6 32 30-46H52z' fill='white'/></svg>" />
+  <link rel="stylesheet" href="css/styles.css" />
+  <link rel="stylesheet" href="css/order.css" />
+</head>
+<body class="shop">
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 100 100"><path d="M58 12 28 56h20l-6 32 30-46H52z" fill="currentColor"/></svg>
+        </span>
+        <div>
+          <div class="brand-name" id="shop-name">Meal Prep</div>
+          <div class="brand-sub" id="shop-tagline">Order online</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main id="shop" class="container" aria-live="polite"><div class="empty">Loading the menu…</div></main>
+
+  <div class="cart-bar" id="cart-bar" hidden>
+    <div><strong id="cart-count">0 meals</strong> · <span id="cart-total">$0.00</span></div>
+    <a class="btn" href="#checkout">Checkout</a>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/config.js"></script>
+  <script src="js/logic.js"></script>
+  <script src="js/seed.js"></script>
+  <script src="js/order.js"></script>
+</body>
+</html>
