@@ -158,6 +158,35 @@
     }).join("")}</div>`;
   }
 
+  function hasTargets(targets) {
+    return L.MACRO_KEYS.some((k) => targets && Number(targets[k]) > 0);
+  }
+
+  /** Customer card body: always shows targets, even before their first order. */
+  function customerMacroSection(cu, orderCount, mealsCount, macros, days) {
+    const withTargets = hasTargets(cu.targets);
+    const t = cu.targets || {};
+    const targetLine = withTargets
+      ? `<div class="muted small" style="margin-top:6px">Daily targets: ${[
+          t.cal ? `${Number(t.cal).toLocaleString()} cal` : "",
+          t.protein ? `${t.protein}g protein` : "",
+          t.carbs ? `${t.carbs}g carbs` : "",
+          t.fat ? `${t.fat}g fat` : "",
+        ].filter(Boolean).join(" · ")}</div>`
+      : `<div class="muted small" style="margin-top:6px">No macro targets set. <a href="#" data-action="edit-customer" data-id="${cu.id}">Add targets</a> to track their progress.</div>`;
+    const orderBtn = `<button class="btn btn-ghost btn-sm" style="margin-top:10px" data-action="order-for" data-id="${cu.id}">+ New order for ${esc(cu.name.split(" ")[0])}</button>`;
+
+    if (orderCount) {
+      return `<div class="small"><strong>${mealsCount} meals</strong> this week</div>
+        ${macroChips(macros)}
+        ${withTargets ? macroBars(L.macroProgress(macros, cu.targets, days)) : targetLine}`;
+    }
+    return `<div class="small"><strong>No order this week yet.</strong></div>
+      ${targetLine}
+      ${withTargets ? macroBars(L.macroProgress(L.sumMacros([]), cu.targets, days)) : ""}
+      ${orderBtn}`;
+  }
+
   function errorBox(key) {
     const errs = ui.errors[key];
     if (!errs || !errs.length) return "";
@@ -394,9 +423,7 @@
                   <button class="btn btn-danger btn-sm" data-action="delete-customer" data-id="${cu.id}" aria-label="Delete ${esc(cu.name)}">✕</button>
                 </div>
               </div>
-              ${theirs.length
-                ? `<div class="small"><strong>${mealsCount} meals</strong> this week</div>${macroChips(macros)}${macroBars(L.macroProgress(macros, cu.targets, days))}`
-                : `<div class="muted small">No order this week.</div>`}
+              ${customerMacroSection(cu, theirs.length, mealsCount, macros, days)}
             </article>`;
           }).join("") || `<div class="card empty">No customers yet.</div>`}
         </section>
@@ -769,6 +796,10 @@
     },
 
     "edit-customer": (el) => { ui.editCustomerId = el.dataset.id; ui.customerDraft = null; ui.errors = {}; render(); $("#c-name").focus(); },
+    "order-for": (el) => {
+      ui.orderDraft = { ...newDraft(), customerId: el.dataset.id };
+      setTab("orders");
+    },
     "cancel-customer": () => { ui.editCustomerId = null; ui.customerDraft = null; ui.errors = {}; render(); },
     "delete-customer": (el) => {
       const id = el.dataset.id;
