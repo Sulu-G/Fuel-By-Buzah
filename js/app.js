@@ -8,7 +8,6 @@
   "use strict";
 
   const L = window.FuelLogic;
-  const STORAGE_KEY = "fuel-by-buzah:v1";
   const TABS = ["dashboard", "orders", "menu", "customers", "prep", "deliveries", "settings"];
 
   // ---------- Helpers ----------
@@ -24,10 +23,14 @@
   const invoiceNo = (o) => "INV-" + o.id.replace(/^ord_/, "").slice(-6).toUpperCase();
 
   // ---------- State ----------
-  let db = load();
+  const S = window.FuelStore;
+  const MODE_KEY = "fuel-by-buzah:mode";
+  const seed = () => window.FuelSeed.buildDemoData(today());
+  let db = null; // loaded in boot()
+  let store = null; // LocalStore or CloudStore (see store.js)
   const ui = {
     tab: TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "dashboard",
-    weekOf: L.orderWindow(today(), db.settings).weekOf,
+    weekOf: null,
     orderDraft: newDraft(),
     editMealId: null,
     editCustomerId: null,
@@ -37,31 +40,88 @@
     checked: new Set(),
     confirming: null,
     undo: null,
+    user: null, // signed-in Supabase user (cloud mode)
+    cloudAvailable: false, // config.js has Supabase settings
+    onboarding: false, // cloud database is empty on first sign-in
+    sync: "idle",
   };
 
-  function isValidDb(d) {
-    return d && typeof d === "object" && d.settings && Array.isArray(d.menu) && Array.isArray(d.customers) && Array.isArray(d.orders);
+  const isValidDb = S.isValidDb;
+
+  function getPref() {
+    try { return localStorage.getItem(MODE_KEY); } catch (_) { return null; }
+  }
+  function setPref(v) {
+    try { v ? localStorage.setItem(MODE_KEY, v) : localStorage.removeItem(MODE_KEY); } catch (_) { /* ignore */ }
   }
 
-  function load() {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (isValidDb(parsed)) return parsed;
-      }
-    } catch (_) {
-      /* storage blocked or corrupt — fall back to demo data */
-    }
-    return window.FuelSeed.buildDemoData(today());
+  // ---------- Persistence ----------
+  let pendingWrites = 0;
+  let lastWriteAt = 0;
+
+  function setSync(state) {
+    ui.sync = state;
+    const pill = $("#sync-pill");
+    if (!pill) return;
+    const labels = {
+      local: ui.cloudAvailable ? "Demo · this browser only" : "Saved in this browser",
+      saving: "Saving…",
+      saved: "Synced",
+      error: "Not saved — retrying",
+      offline: "Offline",
+    };
+    const state2 = store && store.mode === "local" ? "local" : state;
+    pill.textContent = labels[state2] || "Synced";
+    pill.dataset.state = state2;
   }
 
-  function save() {
+  /** Save one change. Optimistic: the UI already shows it; on failure we reload the truth. */
+  async function persist(op) {
+    pendingWrites++;
+    lastWriteAt = Date.now();
+    setSync("saving");
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
-    } catch (_) {
-      toast("Couldn't save — browser storage is unavailable.");
+      await store.apply(op, db);
+      setSync("saved");
+      return true;
+    } catch (err) {
+      setSync("error");
+      toast(`Couldn't save: ${err.message}`);
+      await refresh();
+      return false;
+    } finally {
+      pendingWrites--;
+      lastWriteAt = Date.now();
     }
+  }
+
+  /** Reload everything from the store (used for live sync and error recovery). */
+  async function refresh() {
+    if (!store || store.mode !== "cloud" || !ui.user) return;
+    try {
+      db = await store.loadAll();
+      setSync("saved");
+    } catch (err) {
+      setSync("offline");
+      return;
+    }
+    // Don't yank the page out from under someone mid-typing.
+    const active = document.activeElement;
+    if (active && active.closest && active.closest("#app form")) {
+      toast("Updated from another device — changes show when you finish this form.");
+      return;
+    }
+    render();
+  }
+
+  let remoteTimer;
+  function onRemoteChange() {
+    clearTimeout(remoteTimer);
+    remoteTimer = setTimeout(() => {
+      // Ignore the echo of our own writes.
+      if (pendingWrites > 0 || Date.now() - lastWriteAt < 1500) return;
+      refresh();
+    }, 500);
   }
 
   function newDraft() {
@@ -434,7 +494,14 @@
         </section>
         <section class="card">
           <div class="card-head"><h2>Your data</h2></div>
-          <p class="muted">Everything is stored in this browser. Export a backup file regularly, or move your data to another device with Import.</p>
+          ${store && store.mode === "cloud" ? `
+            <div class="banner open"><span class="dot"></span><span>Synced to your cloud database. Signed in as <strong>${esc(ui.user ? ui.user.email : "")}</strong>.</span></div>
+            <p class="muted">Changes save automatically and show up live on your other devices. Export a backup file every now and then for safekeeping.</p>
+            <div class="btn-row" style="margin-bottom:16px"><button class="btn btn-ghost" type="button" data-action="sign-out">Sign out</button></div>`
+          : ui.cloudAvailable ? `
+            <div class="banner late"><span class="dot"></span><span>Demo mode. This data lives only in this browser.</span></div>
+            <div class="btn-row" style="margin-bottom:16px"><button class="btn" type="button" data-action="use-cloud">Sign in to your database</button></div>`
+          : `<p class="muted">Everything is stored in this browser. Export a backup file regularly, or move your data to another device with Import.</p>`}
           <div class="btn-row" style="margin-bottom:16px">
             <button class="btn btn-ghost" type="button" data-action="export">Export backup (.json)</button>
             <label class="btn btn-ghost" for="import-file" style="cursor:pointer">Import backup</label>
@@ -571,19 +638,63 @@
 
   // ---------- Render ----------
   function render() {
+    if (!db) return;
+    document.body.classList.remove("logged-out");
     const sched = L.weekSchedule(ui.weekOf);
     $("#brand-name").textContent = db.settings.businessName || "Fuel by Buzah";
     $("#week-title").textContent = `Week of ${shortDate(ui.weekOf)}`;
     $("#week-sub").textContent = `Delivers ${longDate(sched.deliveryDay)}`;
     document.querySelectorAll("#tabs [data-tab]").forEach((b) => {
-      if (b.dataset.tab === ui.tab) b.setAttribute("aria-current", "page");
+      if (b.dataset.tab === ui.tab && !ui.onboarding) b.setAttribute("aria-current", "page");
       else b.removeAttribute("aria-current");
     });
-    $("#app").innerHTML = views[ui.tab]();
+    setSync(ui.sync === "idle" ? "saved" : ui.sync);
+    $("#app").innerHTML = ui.onboarding ? onboardingView() : views[ui.tab]();
+  }
+
+  // ---------- Login & first-run screens (cloud mode) ----------
+  function showLogin(message) {
+    db = null;
+    ui.user = null;
+    document.body.classList.add("logged-out");
+    $("#brand-name").textContent = "Fuel by Buzah";
+    $("#app").innerHTML = `
+      <section class="card auth-card">
+        <h1>Sign in</h1>
+        <p class="muted">Sign in to open your meal-prep manager. Your data syncs across your phone and computer.</p>
+        ${message ? `<div class="errors" role="alert">${esc(message)}</div>` : ""}
+        <form data-form="login" novalidate>
+          <div class="field"><label for="l-email">Email</label><input type="email" id="l-email" name="email" autocomplete="username" required /></div>
+          <div class="field"><label for="l-pass">Password</label><input type="password" id="l-pass" name="password" autocomplete="current-password" required /></div>
+          <button class="btn" type="submit" style="width:100%">Sign in</button>
+        </form>
+        <div class="auth-divider"><span>or</span></div>
+        <button class="btn btn-ghost" style="width:100%" data-action="use-demo">Explore the demo</button>
+        <p class="small muted" style="margin-top:10px">The demo runs on sample data saved only in your browser. Nothing is sent to the database.</p>
+      </section>`;
+    const email = $("#l-email");
+    if (email) email.focus();
+  }
+
+  function onboardingView() {
+    const local = S.readLocal();
+    const localCounts = local && !S.isEmpty(local) ? `${local.orders.length} orders, ${local.customers.length} customers, ${local.menu.length} meals` : null;
+    return `
+      <section class="card auth-card" style="max-width:560px">
+        <h1>Welcome${ui.user ? `, ${esc(ui.user.email)}` : ""}</h1>
+        <p class="muted">Your cloud database is connected but empty. How do you want to start?</p>
+        <div class="grid" style="gap:10px">
+          ${localCounts ? `<button class="btn" data-action="onboard" data-choice="local">Copy what's in this browser<span class="small" style="opacity:.8">(${localCounts})</span></button>` : ""}
+          <button class="btn ${localCounts ? "btn-ghost" : ""}" data-action="onboard" data-choice="demo">Start with demo data</button>
+          <button class="btn btn-ghost" data-action="onboard" data-choice="blank">Start blank (just settings)</button>
+          <label class="btn btn-ghost" for="import-file" style="cursor:pointer">Import a backup file</label>
+          <input type="file" id="import-file" accept="application/json,.json" hidden />
+        </div>
+      </section>`;
   }
 
   function setTab(tab) {
-    if (!TABS.includes(tab)) return;
+    if (!TABS.includes(tab) || !db) return;
     ui.tab = tab;
     ui.errors = {};
     ui.mealDraft = null;
@@ -592,6 +703,18 @@
     if (location.hash.slice(1) !== tab) history.replaceState(null, "", `#${tab}`);
     render();
     window.scrollTo({ top: 0 });
+  }
+
+  /** Swap in a whole new dataset (import / reset / erase / onboarding). */
+  async function replaceAll(next, doneMsg) {
+    db = next;
+    ui.onboarding = false;
+    ui.confirming = null;
+    ui.orderDraft = newDraft();
+    ui.weekOf = L.orderWindow(today(), db.settings).weekOf;
+    render();
+    const ok = await persist({ type: "replaceAll", db: next });
+    if (ok && doneMsg) toast(doneMsg);
   }
 
   // ---------- Actions ----------
@@ -613,8 +736,13 @@
       const idx = db.orders.findIndex((o) => o.id === el.dataset.id);
       if (idx < 0) return;
       const [removed] = db.orders.splice(idx, 1);
-      save(); render();
-      toast("Order deleted.", () => { db.orders.splice(idx, 0, removed); save(); render(); });
+      render();
+      persist({ type: "remove", kind: "orders", id: removed.id });
+      toast("Order deleted.", () => {
+        db.orders.splice(idx, 0, removed);
+        render();
+        persist({ type: "upsert", kind: "orders", row: removed });
+      });
     },
 
     "edit-meal": (el) => { ui.editMealId = el.dataset.id; ui.mealDraft = null; ui.errors = {}; render(); $("#m-name").focus(); },
@@ -624,12 +752,20 @@
       if (!meal) return;
       meal.active = false;
       if (ui.editMealId === meal.id) ui.editMealId = null;
-      save(); render();
-      toast(`${meal.name} removed from menu.`, () => { meal.active = true; save(); render(); });
+      render();
+      persist({ type: "upsert", kind: "meals", row: meal });
+      toast(`${meal.name} removed from menu.`, () => {
+        meal.active = true;
+        render();
+        persist({ type: "upsert", kind: "meals", row: meal });
+      });
     },
     "restore-meal": (el) => {
       const meal = db.menu.find((m) => m.id === el.dataset.id);
-      if (meal) { meal.active = true; save(); render(); }
+      if (!meal) return;
+      meal.active = true;
+      render();
+      persist({ type: "upsert", kind: "meals", row: meal });
     },
 
     "edit-customer": (el) => { ui.editCustomerId = el.dataset.id; ui.customerDraft = null; ui.errors = {}; render(); $("#c-name").focus(); },
@@ -639,13 +775,20 @@
       const n = db.orders.filter((o) => o.customerId === id).length;
       if (n) { toast(`Can't delete — this customer has ${n} order${n > 1 ? "s" : ""} on file.`); return; }
       const idx = db.customers.findIndex((c) => c.id === id);
+      if (idx < 0) return;
       const [removed] = db.customers.splice(idx, 1);
-      save(); render();
-      toast(`${removed.name} deleted.`, () => { db.customers.splice(idx, 0, removed); save(); render(); });
+      render();
+      persist({ type: "remove", kind: "customers", id: removed.id });
+      toast(`${removed.name} deleted.`, () => {
+        db.customers.splice(idx, 0, removed);
+        render();
+        persist({ type: "upsert", kind: "customers", row: removed });
+      });
     },
 
     export: () => {
-      const blob = new Blob([JSON.stringify(db, null, 2)], { type: "application/json" });
+      const { settingsSaved, ...plain } = db;
+      const blob = new Blob([JSON.stringify(plain, null, 2)], { type: "application/json" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = `fuel-by-buzah-backup-${today()}.json`;
@@ -656,16 +799,11 @@
     },
     "reset-demo": () => {
       if (ui.confirming !== "reset-demo") { ui.confirming = "reset-demo"; render(); return; }
-      db = window.FuelSeed.buildDemoData(today());
-      ui.confirming = null; ui.weekOf = L.orderWindow(today(), db.settings).weekOf;
-      save(); render(); toast("Demo data restored.");
+      replaceAll(seed(), "Demo data restored.");
     },
     "clear-all": () => {
       if (ui.confirming !== "clear-all") { ui.confirming = "clear-all"; render(); return; }
-      const keep = db.settings;
-      db = { version: 1, settings: keep, menu: [], customers: [], orders: [] };
-      ui.confirming = null; ui.orderDraft = newDraft();
-      save(); render(); toast("All menu, customer and order data erased.");
+      replaceAll({ version: 1, settings: db.settings, menu: [], customers: [], orders: [] }, "All menu, customer and order data erased.");
     },
     undo: () => {
       const fn = ui.undo;
@@ -673,6 +811,29 @@
       $("#toast").classList.remove("show");
       if (fn) fn();
     },
+
+    // --- Cloud / account ---
+    onboard: (el) => {
+      const choice = el.dataset.choice;
+      if (choice === "local") replaceAll(S.readLocal(), "Copied your browser data to the cloud.");
+      else if (choice === "demo") replaceAll(seed(), "Demo data loaded — replace it with your real menu anytime.");
+      else {
+        const blank = { version: 1, settings: db.settings, menu: [], customers: [], orders: [] };
+        db = blank;
+        ui.onboarding = false;
+        render();
+        persist({ type: "settings", settings: blank.settings }).then((ok) => ok && toast("You're all set. Start by adding meals to your menu."));
+        setTab("menu");
+      }
+    },
+    "use-demo": () => { setPref("demo"); boot(); },
+    "use-cloud": () => { setPref(null); boot(); },
+    "sign-out": async () => {
+      await store.signOut();
+      ui.checked.clear();
+      showLogin();
+    },
+    "sync-pill": () => setTab("settings"),
   };
 
   // ---------- Form submits ----------
@@ -688,12 +849,12 @@
       db.orders.push(order);
       ui.errors = {};
       ui.orderDraft = { ...newDraft(), createdOn: ui.orderDraft.createdOn };
-      save();
       if (order.weekOf !== ui.weekOf) {
         ui.weekOf = order.weekOf;
         toast(`Saved to the week of ${shortDate(order.weekOf)}.`);
       } else toast("Order saved.");
       render();
+      persist({ type: "upsert", kind: "orders", row: order });
     },
 
     meal(form) {
@@ -713,15 +874,18 @@
         ui.mealDraft = { name: fd.get("name"), price: fd.get("price"), macros: { cal: fd.get("cal"), protein: fd.get("protein"), carbs: fd.get("carbs"), fat: fd.get("fat") }, ingText: fd.get("ingredients") };
         return render();
       }
-      if (ui.editMealId) {
-        Object.assign(db.menu.find((m) => m.id === ui.editMealId), meal);
+      let saved = ui.editMealId ? db.menu.find((m) => m.id === ui.editMealId) : null;
+      if (saved) {
+        Object.assign(saved, meal);
         toast(`${meal.name} updated.`);
       } else {
-        db.menu.push({ id: L.uid("meal"), active: true, ...meal });
+        saved = { id: L.uid("meal"), active: true, ...meal };
+        db.menu.push(saved);
         toast(`${meal.name} added to the menu.`);
       }
       ui.editMealId = null; ui.mealDraft = null; ui.errors = {};
-      save(); render();
+      render();
+      persist({ type: "upsert", kind: "meals", row: saved });
     },
 
     customer(form) {
@@ -733,15 +897,18 @@
       }
       const cust = { name: String(fd.get("name") || "").trim(), phone: String(fd.get("phone") || "").trim(), address: String(fd.get("address") || "").trim(), targets };
       if (!cust.name) { ui.errors.customer = ["Customer needs a name."]; ui.customerDraft = cust; return render(); }
-      if (ui.editCustomerId) {
-        Object.assign(db.customers.find((c) => c.id === ui.editCustomerId), cust);
+      let saved = ui.editCustomerId ? db.customers.find((c) => c.id === ui.editCustomerId) : null;
+      if (saved) {
+        Object.assign(saved, cust);
         toast(`${cust.name} updated.`);
       } else {
-        db.customers.push({ id: L.uid("cust"), ...cust });
+        saved = { id: L.uid("cust"), ...cust };
+        db.customers.push(saved);
         toast(`${cust.name} added.`);
       }
       ui.editCustomerId = null; ui.customerDraft = null; ui.errors = {};
-      save(); render();
+      render();
+      persist({ type: "upsert", kind: "customers", row: saved });
     },
 
     settings(form) {
@@ -758,7 +925,21 @@
         lateFee: nonNeg("lateFee", 0),
         macroDays: Math.min(Math.max(Math.round(nonNeg("macroDays", 5)) || 5, 1), 7),
       };
-      save(); render(); toast("Settings saved.");
+      render();
+      persist({ type: "settings", settings: db.settings }).then((ok) => ok && toast("Settings saved."));
+    },
+
+    async login(form) {
+      const fd = new FormData(form);
+      const btn = form.querySelector("button[type=submit]");
+      btn.disabled = true;
+      btn.textContent = "Signing in…";
+      try {
+        const user = await store.signIn(String(fd.get("email") || "").trim(), String(fd.get("password") || ""));
+        await startCloud(user);
+      } catch (err) {
+        showLogin(/invalid/i.test(err.message) ? "Wrong email or password." : err.message);
+      }
     },
   };
 
@@ -795,17 +976,19 @@
     if (e.target.id === "import-file" && e.target.files[0]) {
       const reader = new FileReader();
       reader.onload = () => {
+        let data;
         try {
-          const data = JSON.parse(reader.result);
+          data = JSON.parse(reader.result);
           if (!isValidDb(data)) throw new Error("bad shape");
-          db = data;
-          ui.weekOf = L.orderWindow(today(), db.settings).weekOf;
-          save(); render(); toast("Backup imported.");
         } catch (_) {
           toast("That file isn't a Fuel by Buzah backup.");
+          return;
         }
+        delete data.settingsSaved;
+        replaceAll(data, "Backup imported.");
       };
       reader.readAsText(e.target.files[0]);
+      e.target.value = "";
     }
   });
 
@@ -815,7 +998,56 @@
 
   window.addEventListener("afterprint", () => document.body.classList.remove("printing-modal"));
   window.addEventListener("hashchange", () => setTab(location.hash.slice(1)));
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") refresh();
+  });
 
-  save(); // persist demo data on first visit
-  render();
+  // ---------- Boot ----------
+  async function startCloud(user) {
+    ui.user = user;
+    $("#app").innerHTML = `<div class="empty">Loading your data…</div>`;
+    try {
+      db = await store.loadAll();
+    } catch (err) {
+      showLogin(`Couldn't load your data: ${err.message}`);
+      return;
+    }
+    ui.weekOf = L.orderWindow(today(), db.settings).weekOf;
+    ui.onboarding = S.isEmpty(db) && !db.settingsSaved;
+    ui.sync = "saved";
+    store.subscribe(onRemoteChange);
+    render();
+  }
+
+  async function boot() {
+    const cfg = window.FUEL_CONFIG || {};
+    const lib = window.supabase;
+    ui.cloudAvailable = !!(cfg.supabaseUrl && cfg.supabaseKey);
+    const cloudReady = ui.cloudAvailable && lib && typeof lib.createClient === "function";
+
+    if (cloudReady && getPref() !== "demo") {
+      store = S.createCloudStore(cfg, lib, seed().settings);
+      store.onAuthChange((event) => {
+        if (event === "SIGNED_OUT" && ui.user) showLogin("You've been signed out.");
+      });
+      const user = await store.getUser().catch(() => null);
+      if (user) await startCloud(user);
+      else showLogin();
+      return;
+    }
+
+    store = S.createLocalStore(seed);
+    try {
+      db = await store.loadAll();
+    } catch (_) {
+      db = seed(); // storage blocked (private window) — still usable, just not saved
+    }
+    ui.user = null;
+    ui.onboarding = false;
+    ui.weekOf = L.orderWindow(today(), db.settings).weekOf;
+    render();
+    if (ui.cloudAvailable && !cloudReady) toast("Couldn't reach the cloud — using this browser's data for now.");
+  }
+
+  boot();
 })();

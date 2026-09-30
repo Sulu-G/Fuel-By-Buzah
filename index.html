@@ -19,6 +19,7 @@
           <div class="brand-name" id="brand-name">Fuel by Buzah</div>
           <div class="brand-sub">Meal Prep Manager</div>
         </div>
+        <button class="sync-pill" id="sync-pill" data-action="sync-pill" data-state="saved" title="Storage status">Synced</button>
       </div>
       <div class="week-nav" aria-label="Choose week">
         <button class="icon-btn" data-action="week-prev" aria-label="Previous week">‹</button>
@@ -41,7 +42,7 @@
     </nav>
   </header>
 
-  <main id="app" class="container" tabindex="-1"></main>
+  <main id="app" class="container" tabindex="-1"><div class="empty">Loading…</div></main>
 
   <div class="modal" id="modal" hidden>
     <div class="modal-backdrop" data-action="close-modal"></div>
@@ -53,11 +54,15 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <footer class="footer container muted small">
-    Data is saved in this browser only. Use Settings → Export to back it up.
+    Fuel by Buzah · Meal Prep Manager
   </footer>
 
+  <!-- Supabase client (cloud sync). If it can't load, the app falls back to this browser's storage. -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/config.js"></script>
   <script src="js/logic.js"></script>
   <script src="js/seed.js"></script>
+  <script src="js/store.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

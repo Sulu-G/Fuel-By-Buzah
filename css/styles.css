@@ -287,6 +287,31 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
 .receipt-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; font-size: 0.9rem; }
 .receipt-meta div span { display: block; color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 650; }
 
+/* ---------- Sync status & auth ---------- */
+.sync-pill {
+  margin-left: 6px;
+  font: inherit; font-size: 0.75rem; font-weight: 650;
+  padding: 3px 10px 3px 8px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--muted);
+  cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+}
+.sync-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.sync-pill[data-state="saved"] { color: var(--good); background: var(--good-soft); border-color: transparent; }
+.sync-pill[data-state="saving"] { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+.sync-pill[data-state="error"], .sync-pill[data-state="offline"] { color: var(--bad); background: var(--bad-soft); border-color: transparent; }
+@media (max-width: 520px) { .brand-sub { display: none; } }
+
+body.logged-out .tabs, body.logged-out .week-nav, body.logged-out .sync-pill { display: none; }
+.auth-card { max-width: 420px; margin: 32px auto; padding: 24px; }
+.auth-card .btn { flex-direction: column; gap: 2px; }
+.auth-divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 0.8rem; margin: 14px 0; }
+.auth-divider::before, .auth-divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+input[type="email"], input[type="password"] {
+  width: 100%; font: inherit; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+}
+.btn:disabled { opacity: 0.6; cursor: wait; }
+
 /* ---------- Toast ---------- */
 .toast {
   position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 20px);
@@ -300,7 +325,7 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
 /* ---------- Print: only print the modal (receipt) or the current page ---------- */
 @media print {
   body { background: #fff; color: #000; }
-  .topbar, .footer, .toast, .no-print { display: none !important; }
+  .topbar, .footer, .toast, .no-print, .sync-pill { display: none !important; }
   .card { box-shadow: none; border-color: #ccc; }
   body.printing-modal main, body.printing-modal .footer { display: none !important; }
   body.printing-modal .modal { position: static; display: block; padding: 0; }

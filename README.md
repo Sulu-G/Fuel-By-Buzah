@@ -2,7 +2,7 @@
 
 A browser app for running a small weekly meal-prep business. It covers taking orders, tracking each customer's macros, building Saturday's shopping list, planning Sunday's deliveries and printing invoices.
 
-Built with **vanilla HTML, CSS and JavaScript**. There is no framework and no build step. It runs from a single static folder and deploys free on GitHub Pages.
+Built with **vanilla HTML, CSS and JavaScript** on the front end and **Supabase** (Postgres, Auth, Realtime) for cloud sync. There is no framework and no build step. It deploys free on GitHub Pages.
 
 ![Dashboard](docs/screenshot-dashboard.png)
 
@@ -28,7 +28,10 @@ Spreadsheets got messy fast, so I built a tool that follows this cycle directly.
 - **Saturday prep.** Shows a cook list (how many of each meal to make) and a shopping list. The shopping list combines ingredients across all orders, e.g. *jasmine rice: 20 cup, used in 2 meals*. You can check items off as you shop.
 - **Sunday deliveries.** A printable delivery route sorted by address, plus a separate pickup list. It flags customers with no address on file.
 - **Menu management.** Ingredients are typed in plain text (`0.4 lb chicken breast`). Removing a meal from the menu keeps it on file, so past invoices stay accurate.
-- **Your data stays yours.** Everything is stored in `localStorage`, and you can export or import JSON backups.
+- **Cloud sync with a login.** Data lives in a Supabase Postgres database, protected by Row Level Security. Changes appear live on your phone and laptop through Supabase Realtime.
+- **Demo mode.** Visitors click *Explore the demo* to try the full app on sample data stored in their own browser. Nothing touches the real database.
+- **First-run migration.** On first sign-in, the app offers to copy data from the browser, load demo data, start blank or import a backup.
+- **Backups.** Export and import JSON anytime.
 - **Responsive, with dark mode.** Works on a phone at the stove or a laptop at the desk.
 
 ## Screenshots
@@ -41,6 +44,27 @@ Spreadsheets got messy fast, so I built a tool that follows this cycle directly.
 |---|---|
 | ![Prep](docs/screenshot-prep.png) | ![Customers](docs/screenshot-customers-dark.png) |
 
+## Cloud sync (Supabase)
+
+![Login](docs/screenshot-login.png)
+
+How it works:
+
+- `supabase/schema.sql` creates four tables: `settings`, `meals`, `customers` and `orders`. Every row has an `owner_id` that defaults to `auth.uid()`.
+- **Row Level Security** gives each account access only to its own rows. That's why the publishable key in `js/config.js` can safely be public.
+- Primary keys are `(owner_id, id)`, so two accounts can never collide on IDs.
+- A composite foreign key stops an order from pointing at a customer that doesn't exist, or at another account's customer.
+- Saves are **optimistic**: the UI updates instantly and writes in the background. If a write fails, the app warns you and reloads the true state from the database.
+- **Realtime** subscriptions keep devices in sync. An incoming update never wipes a form you're halfway through typing.
+
+To use your own Supabase project:
+
+1. Run `supabase/schema.sql` in the Supabase SQL Editor.
+2. Create your login under **Authentication → Users → Add user**, then turn off public sign-ups.
+3. Put your project URL and **publishable** key in `js/config.js`. Never use a secret or service-role key there.
+
+To run with no cloud at all, leave both values in `js/config.js` empty. The app then saves everything in the browser.
+
 ## Run it
 
 No install is needed. Clone the repo and open `index.html` in a browser.
@@ -51,11 +75,11 @@ cd fuel-by-buzah
 open index.html        # macOS  (Windows: start index.html)
 ```
 
-The app loads with demo data so you can try every screen. To start from scratch, go to **Settings → Start fresh**.
+Open it and click **Explore the demo** to try every screen with sample data, or sign in to use your cloud database.
 
 ## Tests
 
-The business rules (order windows, pricing, macros, shopping-list aggregation, validation) live in `js/logic.js`. They are pure functions with no DOM access and are covered by unit tests using Node's built-in test runner, so no dependencies are needed.
+The business rules (order windows, pricing, macros, shopping-list aggregation, validation) live in `js/logic.js`, and the database row mapping lives in `js/store.js`. Both are pure functions with no DOM access, covered by unit tests using Node's built-in test runner, so no dependencies are needed.
 
 ```bash
 npm test
@@ -70,12 +94,16 @@ index.html            App shell
 css/styles.css        Styles (CSS variables, light/dark, print styles)
 js/logic.js           Pure business logic — used by the browser and by Node tests
 js/seed.js            Demo data
-js/app.js             UI: rendering, events, localStorage
-tests/logic.test.js   Unit tests (node --test)
+js/store.js           Storage layer: LocalStore (browser) + CloudStore (Supabase)
+js/config.js          Supabase URL + publishable key
+js/app.js             UI: rendering, events, login, live sync
+supabase/schema.sql   Tables, Row Level Security policies, realtime
+tests/                Unit tests (node --test)
 ```
 
 Design choices:
 
+- **Storage sits behind one interface.** The UI calls `persist(op)` with small operations like `upsert`, `remove` and `settings`. `LocalStore` and `CloudStore` both implement it, so the same UI runs offline or synced.
 - **Logic is kept separate from UI.** `logic.js` uses a small UMD wrapper, so the same file runs in the browser (as `window.FuelLogic`) and in Node (via `require`). All the rules that matter are tested without a browser.
 - **No build step.** The app uses plain `<script>` tags, so it opens straight from the file system and deploys as-is.
 - **Money is rounded to cents at every step**, which avoids floating-point errors (`0.1 + 0.2`).
@@ -89,10 +117,9 @@ Design choices:
 
 ## Roadmap
 
-- Customer-facing order form (shareable link)
+- Customer-facing order form (shareable link) that writes into the same database
 - Weekly revenue history chart
 - Route optimization for deliveries
-- Sync across devices (e.g. Supabase or Firebase)
 
 ## License
 
