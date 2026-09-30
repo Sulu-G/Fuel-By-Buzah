@@ -44,6 +44,7 @@
     cloudAvailable: false, // config.js has Supabase settings
     onboarding: false, // cloud database is empty on first sign-in
     sync: "idle",
+    calMonth: null, // month shown in the week picker
     route: null, // planned delivery route for a week (see planDeliveryRoute)
     routeBusy: false,
     routeStatus: "",
@@ -362,6 +363,78 @@
       () => { if (!settled) { settled = true; clearTimeout(timer); toast(message); } },
       () => { if (!settled) { settled = true; clearTimeout(timer); fallback(); } }
     );
+  }
+
+  // ---------- Week picker (calendar dropdown) ----------
+
+  function weekCounts() {
+    const m = {};
+    for (const o of db.orders) {
+      const k = o.weekOf;
+      m[k] = m[k] || { confirmed: 0, pending: 0 };
+      if (isConfirmed(o)) m[k].confirmed++;
+      else if (o.status === "pending") m[k].pending++;
+    }
+    return m;
+  }
+
+  const monthStart = (iso) => iso.slice(0, 8) + "01";
+  function shiftMonth(iso, n) {
+    const d = L.parseDate(iso);
+    return L.toISODate(new Date(d.getFullYear(), d.getMonth() + n, 1));
+  }
+
+  function renderWeekPicker() {
+    const pop = $("#week-pop");
+    if (!pop || !db) return;
+    const first = L.parseDate(ui.calMonth);
+    const lastIso = L.toISODate(new Date(first.getFullYear(), first.getMonth() + 1, 0));
+    const counts = weekCounts();
+    const td = today();
+    const thisWeek = L.weekStart(td);
+    const rows = [];
+    for (let ws = L.weekStart(ui.calMonth); ws <= lastIso; ws = L.addDays(ws, 7)) {
+      const c = counts[ws] || { confirmed: 0, pending: 0 };
+      const days = Array.from({ length: 7 }, (_, i) => {
+        const d = L.addDays(ws, i);
+        const cls = ["cal-day", d.slice(0, 7) !== ui.calMonth.slice(0, 7) ? "out" : "", d === td ? "today" : "", i === 6 ? "sun" : ""].join(" ");
+        return `<span class="${cls}">${Number(d.slice(8))}</span>`;
+      }).join("");
+      const label = `Week of ${longDate(ws)}, delivers ${longDate(L.addDays(ws, 6))}: ${c.confirmed} order${c.confirmed === 1 ? "" : "s"}${c.pending ? `, ${c.pending} new online` : ""}`;
+      rows.push(`<button type="button" class="cal-week ${ws === ui.weekOf ? "selected" : ""} ${ws === thisWeek ? "this-week" : ""}" data-action="cal-pick" data-week="${ws}" aria-label="${esc(label)}" aria-pressed="${ws === ui.weekOf}">
+        ${days}<span class="cal-count">${c.confirmed ? `<span class="n">${c.confirmed}</span>` : ""}${c.pending ? `<span class="p" title="New online orders">${c.pending}</span>` : ""}</span></button>`);
+    }
+    pop.innerHTML = `
+      <div class="cal-head">
+        <button type="button" class="icon-btn" data-action="cal-prev" aria-label="Previous month">‹</button>
+        <span>${first.toLocaleDateString("en-US", { month: "long", year: "numeric" })}</span>
+        <button type="button" class="icon-btn" data-action="cal-next" aria-label="Next month">›</button>
+      </div>
+      <div class="cal-grid">
+        <div class="cal-dows">${["M", "T", "W", "T", "F", "S", "S"].map((d) => `<span>${d}</span>`).join("")}<span>Orders</span></div>
+        ${rows.join("")}
+      </div>
+      <div class="cal-foot">
+        <span><span class="cal-count"><span class="n">#</span></span> orders · <span class="cal-count"><span class="p">#</span></span> new online</span>
+        <button type="button" class="btn btn-ghost btn-sm" data-action="cal-this">This week</button>
+      </div>`;
+  }
+
+  function openWeekPicker() {
+    ui.calMonth = monthStart(L.addDays(ui.weekOf, 3)); // month containing most of the week
+    renderWeekPicker();
+    $("#week-pop").hidden = false;
+    $("#week-btn").setAttribute("aria-expanded", "true");
+    const sel = $("#week-pop .cal-week.selected") || $("#week-pop .cal-week");
+    if (sel) sel.focus();
+  }
+
+  function closeWeekPicker(returnFocus) {
+    const pop = $("#week-pop");
+    if (!pop || pop.hidden) return;
+    pop.hidden = true;
+    $("#week-btn").setAttribute("aria-expanded", "false");
+    if (returnFocus) $("#week-btn").focus();
   }
 
   // ---------- Route planning ----------
@@ -708,10 +781,11 @@
                   <div class="qty-row">
                     <div><div class="name">${esc(m.name)}</div><div class="muted small">${m.macros.cal} cal · ${m.macros.protein}g protein</div></div>
                     <span class="num muted">${money(m.price)}</span>
-                    <input type="number" min="0" step="1" inputmode="numeric" name="qty-${m.id}" aria-label="Quantity of ${esc(m.name)}" value="${d.qty[m.id] || ""}" placeholder="0" />
+                    <input type="number" min="0" max="50" step="1" inputmode="numeric" list="qty-options" name="qty-${m.id}" aria-label="Quantity of ${esc(m.name)}" value="${d.qty[m.id] || ""}" placeholder="0" />
                   </div>`).join("") : `<div class="muted small">Your menu is empty — add meals in <a href="#menu" data-action="goto" data-to="menu">Menu</a>.</div>`}
               </div>
             </div>
+            <datalist id="qty-options">${[1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 15, 20, 21, 25, 30].map((n) => `<option value="${n}"></option>`).join("")}</datalist>
             <div class="field">
               <span class="label-text">Fulfillment</span>
               <div class="radio-group">
@@ -1211,9 +1285,14 @@
 
   // ---------- Actions ----------
   const actions = {
-    "week-prev": () => { ui.weekOf = L.addDays(ui.weekOf, -7); render(); },
-    "week-next": () => { ui.weekOf = L.addDays(ui.weekOf, 7); render(); },
-    "week-today": () => { ui.weekOf = L.orderWindow(today(), db.settings).weekOf; render(); },
+    "week-prev": () => { ui.weekOf = L.addDays(ui.weekOf, -7); closeWeekPicker(); render(); },
+    "week-next": () => { ui.weekOf = L.addDays(ui.weekOf, 7); closeWeekPicker(); render(); },
+    "week-today": () => { ui.weekOf = L.orderWindow(today(), db.settings).weekOf; closeWeekPicker(); render(); },
+    "week-picker": () => ($("#week-pop").hidden ? openWeekPicker() : closeWeekPicker()),
+    "cal-prev": () => { ui.calMonth = shiftMonth(ui.calMonth, -1); renderWeekPicker(); },
+    "cal-next": () => { ui.calMonth = shiftMonth(ui.calMonth, 1); renderWeekPicker(); },
+    "cal-pick": (el) => { ui.weekOf = el.dataset.week; closeWeekPicker(true); render(); },
+    "cal-this": () => { ui.weekOf = L.orderWindow(today(), db.settings).weekOf; closeWeekPicker(true); render(); },
     goto: (el) => setTab(el.dataset.to),
     invoice: (el) => openInvoice(el.dataset.id),
     "close-modal": closeModal,
@@ -1537,6 +1616,7 @@
 
   // ---------- Event wiring ----------
   document.addEventListener("click", (e) => {
+    if (!e.target.closest(".week-picker")) closeWeekPicker();
     const tabBtn = e.target.closest("[data-tab]");
     if (tabBtn) return setTab(tabBtn.dataset.tab);
     const el = e.target.closest("[data-action]");
@@ -1586,6 +1666,7 @@
   });
 
   document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("#week-pop").hidden) return closeWeekPicker(true);
     if (e.key === "Escape" && !$("#modal").hidden) closeModal();
   });
 

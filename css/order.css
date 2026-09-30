@@ -36,6 +36,26 @@ body.shop { padding-bottom: 80px; }
 .stepper button:disabled { opacity: 0.35; cursor: default; }
 .stepper output { min-width: 28px; text-align: center; font-weight: 800; font-size: 1.05rem; font-variant-numeric: tabular-nums; }
 .stepper .add-label { font-size: 0.9rem; width: auto; padding: 0 14px; }
+.stepper .qty-menu-btn { width: 30px; font-size: 0.8rem; color: var(--muted); }
+.qty-box { display: inline-flex; align-items: stretch; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface); }
+.qty-box:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.qty-box .qty-input {
+  width: 42px; border: 0; border-radius: 0; text-align: center; font-weight: 800; font-size: 1.05rem;
+  padding: 0; background: transparent; font-variant-numeric: tabular-nums; outline: none;
+}
+.qty-box .qty-menu-btn { height: 34px; border: 0; border-left: 1px solid var(--border); border-radius: 0; background: var(--surface-2); }
+.qty-pop {
+  position: absolute; z-index: 60; display: grid; grid-template-columns: repeat(4, 44px); gap: 4px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+}
+.qty-pop button {
+  height: 38px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface);
+  color: var(--text); font: inherit; font-weight: 700; cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.qty-pop button:hover, .qty-pop button:focus-visible { background: var(--accent-soft); border-color: var(--accent); }
+.qty-pop button.current { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.qty-pop button.remove { grid-column: 1 / -1; color: var(--bad); font-weight: 650; }
 
 .section-title { margin: 24px 0 12px; font-size: 1.2rem; }
 

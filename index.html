@@ -23,9 +23,12 @@
       </div>
       <div class="week-nav" aria-label="Choose week">
         <button class="icon-btn" data-action="week-prev" aria-label="Previous week">‹</button>
-        <div class="week-label">
-          <div id="week-title">Week of —</div>
-          <div class="muted small" id="week-sub"></div>
+        <div class="week-picker">
+          <button type="button" class="week-label" id="week-btn" data-action="week-picker" aria-haspopup="dialog" aria-expanded="false" aria-controls="week-pop" title="Pick a week on the calendar">
+            <span><span id="week-title">Week of —</span> <span class="caret" aria-hidden="true">▾</span></span>
+            <span class="muted small" id="week-sub"></span>
+          </button>
+          <div class="week-pop" id="week-pop" role="dialog" aria-label="Pick a week" hidden></div>
         </div>
         <button class="icon-btn" data-action="week-next" aria-label="Next week">›</button>
         <button class="btn btn-ghost btn-sm" data-action="week-today">This week</button>

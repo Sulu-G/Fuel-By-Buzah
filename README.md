@@ -24,7 +24,7 @@ Spreadsheets got messy fast, so I built a tool that follows this cycle directly.
 
 ## Features
 
-- **Weekly order management.** Every order is assigned to the correct delivery week based on the day it was placed. Friday late fees are applied automatically.
+- **Weekly order management.** Every order is assigned to the correct delivery week based on the day it was placed. Friday late fees are applied automatically. A calendar dropdown shows every week with its order count and new online orders, so you can jump straight to any week.
 - **Live pricing.** The app handles the delivery fee, a percent discount for pickup, optional sales tax (applied to food only) and late fees.
 - **Invoices.** Each order produces a clean invoice that you can print or save as a PDF.
 - **Macros built in.** Every meal stores calories, protein, carbs and fat. Each customer card shows how much of their daily targets the week's meals cover.
@@ -44,6 +44,7 @@ Spreadsheets got messy fast, so I built a tool that follows this cycle directly.
 | ![Order page](docs/screenshot-shop-mobile.png) | ![Confirmation](docs/screenshot-shop-confirm.png) | ![Inbox](docs/screenshot-inbox.png) |
 
 - **Shareable link.** Each shop gets `order.html?shop=<name>`, with an open/closed switch in Settings.
+- **Easy quantities.** Customers tap + / −, type a number, or pick one from a quick menu (1–30).
 - **Customers see macros as they shop.** Totals and per-day averages are shown, and customers can enter daily goals to compare against. Those goals fill in their macro targets in the manager.
 - **Owner approval.** Online orders arrive as *pending*, with a live alert, a tab badge and a count in the browser tab. The owner confirms or declines each one, and only confirmed orders count toward prep, deliveries and revenue.
 - **Payments outside the app.** Customers pick Cash App, Zelle or cash, and the confirmation screen shows the owner's handle plus an order reference for the note. The manager has a Paid toggle on every order.

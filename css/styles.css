@@ -104,7 +104,38 @@ a { color: var(--accent); }
 .brand-sub { font-size: 0.78rem; color: var(--muted); }
 
 .week-nav { display: flex; align-items: center; gap: 6px; }
-.week-label { text-align: center; min-width: 170px; font-weight: 600; }
+.week-picker { position: relative; }
+.week-label {
+  display: grid; justify-items: center; min-width: 180px; font: inherit; font-weight: 600; color: var(--text);
+  background: none; border: 1px solid transparent; border-radius: 10px; padding: 3px 10px; cursor: pointer;
+}
+.week-label:hover, .week-label[aria-expanded="true"] { background: var(--surface-2); border-color: var(--border); }
+.week-label .caret { font-size: 0.7rem; color: var(--muted); margin-left: 2px; }
+.week-label #week-title { display: inline; }
+.week-pop {
+  position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%); z-index: 40;
+  width: 330px; max-width: calc(100vw - 24px); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 14px; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.18); padding: 12px;
+}
+@media (max-width: 640px) { .week-pop { position: fixed; top: 110px; left: 12px; right: 12px; transform: none; width: auto; } }
+.cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-weight: 700; }
+.cal-grid { display: grid; gap: 2px; }
+.cal-dows, .cal-week { display: grid; grid-template-columns: repeat(7, 1fr) 44px; align-items: center; }
+.cal-dows span { font-size: 0.7rem; color: var(--muted); text-align: center; font-weight: 650; padding: 2px 0; }
+.cal-week {
+  font: inherit; background: none; border: 1px solid transparent; border-radius: 8px; padding: 0; cursor: pointer; color: var(--text); width: 100%;
+}
+.cal-week:hover { background: var(--surface-2); }
+.cal-week.selected { background: var(--accent-soft); border-color: var(--accent); }
+.cal-week.this-week .cal-thisweek { display: inline; }
+.cal-day { text-align: center; padding: 7px 0; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.cal-day.out { color: var(--muted); opacity: 0.55; }
+.cal-day.today { font-weight: 800; color: var(--accent); }
+.cal-day.sun { font-weight: 700; }
+.cal-count { font-size: 0.72rem; font-weight: 750; text-align: center; }
+.cal-count .n { display: inline-block; min-width: 20px; padding: 1px 5px; border-radius: 999px; background: var(--good-soft); color: var(--good); }
+.cal-count .p { display: inline-block; min-width: 14px; margin-left: 2px; padding: 1px 4px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); }
+.cal-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; font-size: 0.75rem; color: var(--muted); }
 .icon-btn {
   width: 32px; height: 32px; border-radius: 8px;
   border: 1px solid var(--border); background: var(--surface); color: var(--text);
@@ -374,3 +405,6 @@ input[type="email"], input[type="password"] {
   body.printing-modal .modal-backdrop { display: none; }
   body.printing-modal .modal-card { box-shadow: none; max-height: none; width: 100%; padding: 0; }
 }
+
+/* Narrow phones: the calendar has its own "This week" button. */
+@media (max-width: 420px) { .week-nav > [data-action="week-today"] { display: none; } }

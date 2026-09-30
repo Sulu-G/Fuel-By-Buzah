@@ -190,13 +190,70 @@
     updateSummary();
   }
 
+  const QUICK_QTYS = [1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 15, 20, 21, 25, 30];
+
+  /** Quantity control: tap +/−, type a number, or pick one from the ▾ menu. */
   function stepperHtml(id) {
     const q = state.cart[id] || 0;
-    if (!q) return `<button type="button" class="add add-label" data-add="${esc(id)}" aria-label="Add">Add</button>`;
+    const name = (state.shop.menu.find((m) => m.id === id) || {}).name || "meal";
+    const menuBtn = `<button type="button" class="qty-menu-btn" data-qtymenu="${esc(id)}" aria-haspopup="listbox" aria-label="Choose how many ${esc(name)}">▾</button>`;
+    if (!q) return `<button type="button" class="add add-label" data-add="${esc(id)}" aria-label="Add ${esc(name)}">Add</button>${menuBtn}`;
     return `
       <button type="button" data-dec="${esc(id)}" aria-label="Remove one">−</button>
-      <output aria-live="polite">${q}</output>
+      <span class="qty-box">
+        <input class="qty-input" type="text" inputmode="numeric" pattern="[0-9]*" data-qty="${esc(id)}" value="${q}" aria-label="How many ${esc(name)}" />
+        ${menuBtn}
+      </span>
       <button type="button" class="add" data-inc="${esc(id)}" aria-label="Add one" ${q >= MAX_QTY ? "disabled" : ""}>+</button>`;
+  }
+
+  function closeQtyMenu() {
+    const pop = document.getElementById("qty-pop");
+    if (pop) pop.remove();
+  }
+
+  function openQtyMenu(btn) {
+    const id = btn.dataset.qtymenu;
+    const wasOpenFor = document.getElementById("qty-pop") && document.getElementById("qty-pop").dataset.for;
+    closeQtyMenu();
+    if (wasOpenFor === id) return; // second tap closes
+    const cur = state.cart[id] || 0;
+    const pop = document.createElement("div");
+    pop.id = "qty-pop";
+    pop.className = "qty-pop";
+    pop.dataset.for = id;
+    pop.setAttribute("role", "listbox");
+    pop.innerHTML = `${cur ? `<button type="button" role="option" data-pick="0" class="remove">Remove</button>` : ""}${QUICK_QTYS.map((n) => `<button type="button" role="option" data-pick="${n}" aria-selected="${n === cur}" class="${n === cur ? "current" : ""}">${n}</button>`).join("")}`;
+    document.body.appendChild(pop);
+    const r = btn.getBoundingClientRect();
+    const w = pop.offsetWidth;
+    const left = Math.min(Math.max(8, r.right - w), window.innerWidth - w - 8);
+    const below = r.bottom + 6 + pop.offsetHeight < window.innerHeight;
+    pop.style.left = `${left + window.scrollX}px`;
+    pop.style.top = `${(below ? r.bottom + 6 : r.top - pop.offsetHeight - 6) + window.scrollY}px`;
+    const first = pop.querySelector(".current") || pop.querySelector("button");
+    if (first) first.focus();
+  }
+
+  /** Apply a typed quantity without re-rendering the input (keeps the cursor where it is). */
+  function typedQty(input, commit) {
+    const id = input.dataset.qty;
+    const digits = input.value.replace(/\D/g, "").slice(0, 2);
+    if (digits !== input.value) input.value = digits;
+    if (digits === "" && !commit) return; // let them clear the box and type a new number
+    const q = Math.min(MAX_QTY, Number(digits || 0));
+    // Only rebuild the control when it must switch back to "Add"; rebuilding while the
+    // shopper is clicking + / − / ▾ would swallow that click.
+    if (commit && q === 0) return setQty(id, 0, true);
+    if (commit) {
+      input.value = String(q);
+      const inc = input.closest(".stepper").querySelector("[data-inc]");
+      if (inc) inc.disabled = q >= MAX_QTY;
+    }
+    state.cart[id] = q;
+    const card = input.closest(".menu-card");
+    if (card) card.classList.toggle("in-cart", q > 0);
+    updateSummary();
   }
 
   function payOptionsHtml() {
@@ -247,12 +304,17 @@
     $("#cart-total").textContent = money(t.total);
   }
 
-  function setQty(id, q) {
+  function setQty(id, q, keepFocus) {
     state.cart[id] = Math.max(0, Math.min(MAX_QTY, q));
     const card = document.querySelector(`[data-meal="${CSS.escape(id)}"]`);
     if (card) {
-      card.querySelector("[data-stepper]").innerHTML = stepperHtml(id);
+      const box = card.querySelector("[data-stepper]");
+      box.innerHTML = stepperHtml(id);
       card.classList.toggle("in-cart", state.cart[id] > 0);
+      if (keepFocus) {
+        const target = box.querySelector(".qty-input") || box.querySelector("[data-add]");
+        if (target) target.focus();
+      }
     }
     updateSummary();
   }
@@ -366,6 +428,15 @@
   // ---------- Events ----------
 
   document.addEventListener("click", (e) => {
+    const menuBtn = e.target.closest("[data-qtymenu]");
+    if (menuBtn) return openQtyMenu(menuBtn);
+    const pick = e.target.closest("[data-pick]");
+    if (pick) {
+      const id = pick.closest("#qty-pop").dataset.for;
+      closeQtyMenu();
+      return setQty(id, Number(pick.dataset.pick), true);
+    }
+    if (!e.target.closest("#qty-pop")) closeQtyMenu();
     const t = e.target.closest("[data-add],[data-inc],[data-dec],[data-copy],[data-restart]");
     if (!t) return;
     if (t.dataset.add) setQty(t.dataset.add, 1);
@@ -391,7 +462,28 @@
     if (e.target.name === "payment") state.payment = e.target.value;
   });
 
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && document.getElementById("qty-pop")) {
+      const id = document.getElementById("qty-pop").dataset.for;
+      closeQtyMenu();
+      const btn = document.querySelector(`[data-qtymenu="${CSS.escape(id)}"]`);
+      if (btn) btn.focus();
+    }
+    if (e.key === "Enter" && e.target.matches && e.target.matches(".qty-input")) {
+      e.preventDefault();
+      typedQty(e.target, true);
+    }
+  });
+
+  window.addEventListener("resize", closeQtyMenu);
+
+  // Typed quantities: update totals as they type, tidy up when they leave the box.
+  document.addEventListener("focusout", (e) => {
+    if (e.target.matches && e.target.matches(".qty-input")) typedQty(e.target, true);
+  });
+
   document.addEventListener("input", (e) => {
+    if (e.target.matches && e.target.matches(".qty-input")) return typedQty(e.target, false);
     const k = e.target.dataset && e.target.dataset.goal;
     if (k) {
       const v = Number(e.target.value);
