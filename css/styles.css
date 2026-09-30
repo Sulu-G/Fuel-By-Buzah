@@ -313,6 +313,22 @@ ol.steps a { font-weight: 650; }
 label.check { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; font-weight: 600; color: var(--text); cursor: pointer; }
 label.check input { accent-color: var(--accent); width: 16px; height: 16px; }
 
+/* ---------- Route planner ---------- */
+.route-controls { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.route-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 12px 0; }
+.route-summary > div { background: var(--surface-2); border-radius: 10px; padding: 8px 12px; min-width: 0; }
+.route-summary .label { display: block; color: var(--muted); font-size: 0.72rem; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; }
+.route-summary strong { font-size: 1.05rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.route-map { height: 380px; border-radius: 10px; border: 1px solid var(--border); margin-top: 8px; background: var(--surface-2); overflow: hidden; }
+@media (max-width: 600px) { .route-map { height: 300px; } }
+.route-pin {
+  display: grid !important; place-items: center; border-radius: 50%;
+  background: var(--accent); color: #fff; font-weight: 800; font-size: 0.8rem;
+  border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+.route-pin.start { border-radius: 8px; background: #1d1a17; font-size: 0.7rem; }
+.leaflet-container a.btn { color: inherit; }
+
 /* ---------- Sync status & auth ---------- */
 .sync-pill {
   margin-left: 6px;

@@ -42,6 +42,7 @@
       phone: c.phone || "",
       address: c.address || "",
       targets: c.targets || {},
+      geo: c.geo || null,
     }),
     orders: (o) => ({
       id: o.id,
@@ -76,6 +77,7 @@
       phone: r.phone || "",
       address: r.address || "",
       targets: r.targets || {},
+      geo: r.geo || null,
     }),
     orders: (r) => ({
       id: r.id,

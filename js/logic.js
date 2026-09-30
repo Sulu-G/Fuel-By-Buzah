@@ -261,6 +261,7 @@
       const ct = o.contact || {};
       return {
         orderId: o.id,
+        customerId: o.customerId,
         customer: c.name,
         // Online orders keep the address the customer typed for that order.
         address: (o.fulfillment === "delivery" && ct.address) || c.address,

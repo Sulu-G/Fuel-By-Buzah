@@ -29,7 +29,7 @@ Spreadsheets got messy fast, so I built a tool that follows this cycle directly.
 - **Invoices.** Each order produces a clean invoice that you can print or save as a PDF.
 - **Macros built in.** Every meal stores calories, protein, carbs and fat. Each customer card shows how much of their daily targets the week's meals cover.
 - **Saturday prep.** Shows a cook list (how many of each meal to make) and a shopping list. The shopping list combines ingredients across all orders, e.g. *jasmine rice: 20 cup, used in 2 meals*. You can check items off as you shop.
-- **Sunday deliveries.** A printable delivery route sorted by address, plus a separate pickup list. It flags customers with no address on file.
+- **Sunday deliveries with route optimization.** One tap plans the fastest driving order from your current location. It shows a map with numbered stops, total miles and drive time, and a drive-time column, then hands the route to Google Maps for turn-by-turn directions. The pickup list is separate, and customers with no address on file are flagged.
 - **Menu management.** Ingredients are typed in plain text (`0.4 lb chicken breast`). Removing a meal from the menu keeps it on file, so past invoices stay accurate.
 - **Cloud sync with a login.** Data lives in a Supabase Postgres database, protected by Row Level Security. Changes appear live on your phone and laptop through Supabase Realtime.
 - **Demo mode.** Visitors click *Explore the demo* to try the full app on sample data stored in their own browser. Nothing touches the real database.
@@ -76,6 +76,25 @@ Validation covers name, phone, address, allowed payment methods, whole quantitie
 
 The SQL is covered by 42 ordering tests and 16 alert tests. They include parity checks showing the database computes the **same week and the same total as `js/logic.js`** across 42 day/policy combinations and 40 randomized orders.
 
+## Delivery route optimizer
+
+![Route planner](docs/screenshot-route.png)
+
+Planning a route on the **Sunday Deliveries** tab takes four steps:
+
+1. **Geocode.** Each unique delivery address is looked up with OpenStreetMap Nominatim. Every request, retries included, is throttled to one per second, per their usage policy. If an address with an apartment or unit number isn't found, it's retried without the unit. Coordinates are saved on the customer (`customers.geo`), so the next week needs no lookups, on any device. If the address changes, it's looked up again.
+2. **Driving-time matrix.** One OSRM `table` request returns real driving times between every pair of stops. It handles one-way streets, since A→B can differ from B→A.
+3. **Solve.** `js/route.js` finds the best order for an open route, starting at the driver and ending at the last stop:
+   - Up to 15 stops: an **exact** Held–Karp dynamic program (15 stops solve in ~40 ms).
+   - Above 15 stops: **multi-start 2-opt + or-opt local search**. On 60 random 12-stop maps it found the true best route every time, checked against the exact solver.
+4. **Draw and hand off.** The route line and totals come from OSRM, and the map is drawn with Leaflet on OpenStreetMap tiles. Google Maps links are split into legs to respect its waypoint limits (9 per link on desktop, 3 on mobile).
+
+Fallbacks:
+
+- If the routing server is down, straight-line estimates still produce a good order.
+- If an address can't be found, it's flagged and everything else is still routed.
+- If the map can't load, the ordered list still works.
+
 ## Screenshots
 
 | Orders + live preview | Invoice |
@@ -101,7 +120,7 @@ How it works:
 
 To use your own Supabase project:
 
-1. Run `supabase/schema.sql`, then `supabase/v2_online_ordering.sql`, then `supabase/v3_order_alerts.sql`, in the Supabase SQL Editor. All three are safe to re-run.
+1. Run the files in `supabase/` in order (`schema.sql`, `v2_…`, `v3_…`, `v4_…`) in the Supabase SQL Editor. All of them are safe to re-run.
 2. Create your login under **Authentication → Users → Add user**, then turn off public sign-ups.
 3. Put your project URL and **publishable** key in `js/config.js`. Never use a secret or service-role key there.
 
@@ -139,12 +158,14 @@ css/order.css         Ordering page styles
 js/logic.js           Pure business logic — used by the browser and by Node tests
 js/seed.js            Demo data
 js/store.js           Storage layer: LocalStore (browser) + CloudStore (Supabase)
+js/route.js           Route optimizer: geocoding, OSRM matrix, exact + heuristic solver, Google Maps legs
 js/config.js          Supabase URL + publishable key
 js/app.js             Manager UI: rendering, events, login, live sync, order inbox
 js/order.js           Ordering page: menu, cart, macros, checkout
 supabase/schema.sql   Tables, Row Level Security policies, realtime
 supabase/v2_online_ordering.sql   Shops, order status/payments, public order functions
 supabase/v3_order_alerts.sql      Push alerts for new orders (trigger + pg_net + ntfy)
+supabase/v4_route_geo.sql         Saved map coordinates for customers
 tests/                Unit tests (node --test)
 ```
 
@@ -168,7 +189,7 @@ Design choices:
 - Automatic "order confirmed" texts to customers (with opt-in)
 - Card payments with Stripe Checkout
 - Weekly revenue history chart
-- Route optimization for deliveries
+- Delivery time windows (e.g. "after 2pm") in the route optimizer
 
 ## License
 

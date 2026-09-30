@@ -44,6 +44,10 @@
     cloudAvailable: false, // config.js has Supabase settings
     onboarding: false, // cloud database is empty on first sign-in
     sync: "idle",
+    route: null, // planned delivery route for a week (see planDeliveryRoute)
+    routeBusy: false,
+    routeStatus: "",
+    routeStartText: "",
   };
 
   const isValidDb = S.isValidDb;
@@ -360,6 +364,240 @@
     );
   }
 
+  // ---------- Route planning ----------
+
+  const GEO_CACHE_KEY = "fuel-by-buzah:geo";
+  const ROUTE_KEY = "fuel-by-buzah:route";
+  const isTouch = () => !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+
+  function readJSON(key, fallback) {
+    try { return JSON.parse(localStorage.getItem(key) || "null") || fallback; } catch (_) { return fallback; }
+  }
+  function writeJSON(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) { /* private mode */ }
+  }
+
+  /** Unique delivery addresses for the week (two orders to one address = one stop). */
+  function deliveryStops(rows) {
+    const map = new Map();
+    for (const r of rows) {
+      if (!r.address) continue;
+      const key = FuelRoute.normalizeAddress(r.address);
+      const stop = map.get(key) || { key, address: r.address, names: [], customerIds: [] };
+      stop.names.push(r.customer);
+      if (r.customerId) stop.customerIds.push(r.customerId);
+      map.set(key, stop);
+    }
+    return [...map.values()];
+  }
+
+  const stopsSignature = (stops) => stops.map((s) => s.key).sort().join("|");
+
+  /** The saved route for this week, if the set of addresses hasn't changed since. */
+  function currentRoute(stops) {
+    const r = ui.route;
+    return r && r.weekOf === ui.weekOf && r.signature === stopsSignature(stops) ? r : null;
+  }
+
+  function routeCard(stops, route, stale) {
+    const miles = route ? FuelRoute.metersToMiles(route.distance) : 0;
+    const mins = route ? Math.round(route.duration / 60) : 0;
+    const orderedAddrs = route ? route.order.map((k) => (stops.find((s) => s.key === k) || {}).address).filter(Boolean) : [];
+    const legs = route ? FuelRoute.googleMapsLegs(orderedAddrs, isTouch() ? 3 : 9) : [];
+    return `
+      <section class="card route-card" style="margin-bottom:16px">
+        <div class="card-head"><h2>Plan the route</h2>${route ? `<span class="badge pickup">${route.order.length} stops</span>` : ""}</div>
+        <form class="route-controls no-print" data-form="route" novalidate>
+          <div class="field" style="margin:0;flex:1;min-width:220px">
+            <label for="rt-start">Starting from</label>
+            <input type="text" id="rt-start" name="start" value="${esc(ui.routeStartText || "")}" placeholder="Leave blank to use your current location" autocomplete="street-address" />
+          </div>
+          <button class="btn" type="submit" id="route-plan-btn" ${ui.routeBusy ? "disabled" : ""}>${ui.routeBusy ? "Planning…" : route ? "Re-plan route" : "Plan best route"}</button>
+        </form>
+        <div id="route-status" class="small muted" role="status" style="margin-top:8px">${esc(ui.routeBusy ? ui.routeStatus : stale ? "Deliveries changed since you planned. Plan again to update the route." : ui.routeStatus || "")}</div>
+        ${route ? `
+          <div class="route-summary">
+            <div><span class="label">Drive</span><strong>${mins >= 60 ? `${Math.floor(mins / 60)} h ${mins % 60} min` : `${mins} min`}</strong></div>
+            <div><span class="label">Distance</span><strong>${miles.toFixed(1)} mi</strong></div>
+            <div><span class="label">Stops</span><strong>${route.order.length}</strong></div>
+            <div><span class="label">From</span><strong>${esc(route.startLabel)}</strong></div>
+          </div>
+          ${route.estimated ? `<div class="small warn-text">The routing server was busy, so times are estimated from straight-line distance. The stop order is still a good one.</div>` : ""}
+          ${route.failed && route.failed.length ? `<div class="small warn-text">Couldn't find ${route.failed.length === 1 ? "this address" : "these addresses"} on the map: ${route.failed.map(esc).join("; ")}. Check the spelling in Customers.</div>` : ""}
+          <div id="route-map" class="route-map" aria-label="Map of the delivery route"></div>
+          <div class="no-print" style="margin-top:12px">
+            <span class="label-text">Navigate in Google Maps</span>
+            <div class="btn-row" style="margin-top:6px">${legs.map((l, i) => `<a class="btn ${i === 0 ? "" : "btn-ghost"} btn-sm" href="${esc(l.url)}" target="_blank" rel="noopener">${legs.length === 1 ? "Start navigation" : `Stops ${l.from}–${l.to}`}</a>`).join("")}</div>
+            ${legs.length > 1 ? `<p class="small muted" style="margin:6px 0 0">Google Maps allows ${isTouch() ? "a few" : "about 10"} stops per trip, so the route is split into legs. Open the next one when you finish a leg.</p>` : ""}
+          </div>
+          <p class="small muted" style="margin:10px 0 0">Map © OpenStreetMap contributors · Routing by OSRM</p>` : ""}
+      </section>`;
+  }
+
+  function setRouteStatus(msg) {
+    ui.routeStatus = msg;
+    const el = $("#route-status");
+    if (el) el.textContent = msg;
+  }
+
+  function getCurrentPosition() {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) return resolve(null);
+      navigator.geolocation.getCurrentPosition(
+        (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+        () => resolve(null),
+        { enableHighAccuracy: false, timeout: 10000, maximumAge: 120000 }
+      );
+    });
+  }
+
+  let lastGeocodeAt = 0;
+  /** Every request to OpenStreetMap, retries included, waits its turn: at most 1 per second (their policy). */
+  async function politeFetch(url, opts) {
+    const wait = 1100 - (Date.now() - lastGeocodeAt);
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    lastGeocodeAt = Date.now();
+    return fetch(url, opts);
+  }
+  const geocodeThrottled = (address) => FuelRoute.geocodeAddress(address, politeFetch);
+
+  /** Coordinates for a stop: from the customer record, then this browser's cache, then a lookup. */
+  async function locateStop(stop, cache) {
+    for (const id of stop.customerIds) {
+      const c = db.customers.find((x) => x.id === id);
+      if (c && c.geo && c.geo.q === stop.key) return c.geo;
+    }
+    if (cache[stop.key]) return cache[stop.key];
+    const g = await geocodeThrottled(stop.address);
+    if (!g) return null;
+    const geo = { q: stop.key, lat: g.lat, lng: g.lng };
+    cache[stop.key] = geo;
+    writeJSON(GEO_CACHE_KEY, cache);
+    // Save on the customer so every device (and next week) skips the lookup.
+    for (const id of stop.customerIds) {
+      const c = db.customers.find((x) => x.id === id);
+      if (c && FuelRoute.normalizeAddress(c.address) === stop.key) {
+        c.geo = geo;
+        persist({ type: "upsert", kind: "customers", row: c });
+      }
+    }
+    return geo;
+  }
+
+  async function planDeliveryRoute(startText) {
+    const { menuById, customersById, weekOrders, s } = ctx();
+    const stops = deliveryStops(L.fulfillmentSheet(weekOrders, customersById, menuById, s).delivery);
+    if (!stops.length) return;
+    ui.routeBusy = true;
+    ui.routeStartText = startText;
+    render();
+    try {
+      let start = null;
+      let startLabel = "Best first stop";
+      if (startText) {
+        setRouteStatus("Finding your starting address…");
+        const g = await geocodeThrottled(startText);
+        if (!g) throw new Error("Couldn't find that starting address. Try adding the city, or leave it blank to use your location.");
+        start = { lat: g.lat, lng: g.lng };
+        startLabel = startText;
+      } else {
+        setRouteStatus("Getting your location…");
+        start = await getCurrentPosition();
+        startLabel = start ? "Your location" : "Best first stop";
+      }
+
+      const cache = readJSON(GEO_CACHE_KEY, {});
+      const found = [];
+      const failed = [];
+      for (let i = 0; i < stops.length; i++) {
+        setRouteStatus(`Finding addresses on the map (${i + 1} of ${stops.length})…`);
+        let geo = null;
+        try { geo = await locateStop(stops[i], cache); } catch (_) { geo = null; }
+        if (geo) found.push({ ...stops[i], lat: geo.lat, lng: geo.lng });
+        else failed.push(stops[i].address);
+      }
+      if (!found.length) throw new Error("None of the addresses could be found on the map. Check them in Customers.");
+
+      setRouteStatus("Working out the fastest order…");
+      const plan = await FuelRoute.planRoute(start, found, (url, opts) => fetch(url, opts));
+      ui.route = {
+        weekOf: ui.weekOf,
+        signature: stopsSignature(stops),
+        start,
+        startLabel,
+        order: plan.order.map((i) => found[i].key),
+        points: Object.fromEntries(found.map((f) => [f.key, { lat: f.lat, lng: f.lng, names: f.names, address: f.address }])),
+        legs: plan.legs,
+        line: plan.line,
+        distance: plan.distance,
+        duration: plan.duration,
+        estimated: plan.estimated,
+        failed,
+      };
+      writeJSON(ROUTE_KEY, ui.route);
+      ui.routeStatus = start ? "" : "Couldn't get your location, so the route starts at the best first stop.";
+    } catch (err) {
+      ui.routeStatus = err.message;
+    } finally {
+      ui.routeBusy = false;
+      render();
+    }
+  }
+
+  let leafletPromise = null;
+  function loadLeaflet() {
+    if (window.L && window.L.map) return Promise.resolve(window.L);
+    if (leafletPromise) return leafletPromise;
+    leafletPromise = new Promise((resolve, reject) => {
+      const css = document.createElement("link");
+      css.rel = "stylesheet";
+      css.href = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css";
+      document.head.appendChild(css);
+      const js = document.createElement("script");
+      js.src = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js";
+      js.onload = () => resolve(window.L);
+      js.onerror = () => { leafletPromise = null; reject(new Error("Map couldn't load")); };
+      document.head.appendChild(js);
+    });
+    return leafletPromise;
+  }
+
+  let routeMap = null;
+  async function drawRouteMap() {
+    const el = $("#route-map");
+    const route = ui.route;
+    if (!el || !route) return;
+    let LF;
+    try { LF = await loadLeaflet(); } catch (_) {
+      el.innerHTML = `<div class="empty">The map couldn't load, but the stop order below is ready.</div>`;
+      return;
+    }
+    if (!document.body.contains(el)) return; // page changed while loading
+    if (routeMap) { routeMap.remove(); routeMap = null; }
+    routeMap = LF.map(el, { scrollWheelZoom: false });
+    LF.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    }).addTo(routeMap);
+    const bounds = [];
+    if (route.start) {
+      LF.marker([route.start.lat, route.start.lng], { icon: LF.divIcon({ className: "route-pin start", html: "You", iconSize: [34, 24] }) })
+        .addTo(routeMap).bindPopup(esc(route.startLabel));
+      bounds.push([route.start.lat, route.start.lng]);
+    }
+    route.order.forEach((key, i) => {
+      const p = route.points[key];
+      if (!p) return;
+      LF.marker([p.lat, p.lng], { icon: LF.divIcon({ className: "route-pin", html: String(i + 1), iconSize: [28, 28] }) })
+        .addTo(routeMap).bindPopup(`<strong>${i + 1}. ${esc(p.names.join(", "))}</strong><br>${esc(p.address)}`);
+      bounds.push([p.lat, p.lng]);
+    });
+    if (route.line && route.line.length > 1) {
+      LF.polyline(route.line, { color: getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#e4572e", weight: 5, opacity: 0.85 }).addTo(routeMap);
+    }
+    if (bounds.length) routeMap.fitBounds(bounds, { padding: [30, 30] });
+  }
+
   function errorBox(key) {
     const errs = ui.errors[key];
     if (!errs || !errs.length) return "";
@@ -654,21 +892,49 @@
       const { menuById, customersById, weekOrders, s } = ctx();
       const sched = L.weekSchedule(ui.weekOf);
       const sheet = L.fulfillmentSheet(weekOrders, customersById, menuById, s);
+      const stops = deliveryStops(sheet.delivery);
+      const route = currentRoute(stops);
+      const stale = ui.route && ui.route.weekOf === ui.weekOf && !route;
 
-      const table = (rows, isDelivery) => rows.length ? `<div class="table-wrap"><table>
-        <thead><tr><th>#</th><th>Customer</th>${isDelivery ? "<th>Address</th>" : ""}<th>Phone</th><th class="right">Meals</th><th>Notes</th><th class="right">Total</th></tr></thead>
-        <tbody>${rows.map((r, i) => `<tr>
-          <td class="num">${i + 1}</td><td><strong>${esc(r.customer)}</strong></td>
-          ${isDelivery ? `<td>${r.address ? esc(r.address) : '<span class="badge late">No address on file</span>'}</td>` : ""}
-          <td>${esc(r.phone)}</td><td class="right num">${r.meals}</td><td class="muted small">${esc(r.notes)}</td><td class="right num">${money(r.total)}</td></tr>`).join("")}</tbody>
-      </table></div>` : `<div class="empty">None this week.</div>`;
+      // Put delivery rows in driving order when a route is planned.
+      let deliveryRows = sheet.delivery;
+      const legByKey = {};
+      if (route) {
+        const rank = new Map(route.order.map((k, i) => [k, i]));
+        route.order.forEach((k, i) => { legByKey[k] = route.legs[i]; });
+        const keyOf = (r) => FuelRoute.normalizeAddress(r.address);
+        deliveryRows = [...sheet.delivery].sort((a, b) => (rank.has(keyOf(a)) ? rank.get(keyOf(a)) : 1e6) - (rank.has(keyOf(b)) ? rank.get(keyOf(b)) : 1e6));
+      }
+
+      const table = (rows, isDelivery) => {
+        if (!rows.length) return `<div class="empty">None this week.</div>`;
+        let lastKey = null;
+        let stopNo = 0;
+        return `<div class="table-wrap"><table>
+        <thead><tr><th>#</th><th>Customer</th>${isDelivery ? "<th>Address</th>" : ""}<th>Phone</th><th class="right">Meals</th><th>Notes</th><th class="right">Total</th>${isDelivery && route ? '<th class="right">Drive</th>' : ""}</tr></thead>
+        <tbody>${rows.map((r, i) => {
+          const key = isDelivery ? FuelRoute.normalizeAddress(r.address) : null;
+          const sameStop = key && key === lastKey;
+          if (!sameStop) stopNo++;
+          lastKey = key;
+          const leg = isDelivery && route && !sameStop ? legByKey[key] : null;
+          const unmapped = isDelivery && route && r.address && !(key in legByKey);
+          return `<tr>
+          <td class="num">${isDelivery && route ? (sameStop ? "" : stopNo) : i + 1}</td><td><strong>${esc(r.customer)}</strong></td>
+          ${isDelivery ? `<td>${r.address ? esc(r.address) : '<span class="badge late">No address on file</span>'}${unmapped ? ' <span class="badge late">Not on map</span>' : ""}</td>` : ""}
+          <td>${esc(r.phone)}</td><td class="right num">${r.meals}</td><td class="muted small">${esc(r.notes)}</td><td class="right num">${money(r.total)}</td>
+          ${isDelivery && route ? `<td class="right num small">${leg ? `${Math.max(1, Math.round(leg.duration / 60))} min` : ""}</td>` : ""}</tr>`;
+        }).join("")}</tbody>
+      </table></div>`;
+      };
 
       return `
       <div class="page-head">
         <div><h1>Sunday deliveries</h1><p class="muted">${longDate(sched.deliveryDay)} · ${sheet.delivery.length} drop-offs, ${sheet.pickup.length} pickups</p></div>
         <button class="btn btn-ghost no-print" data-action="print">Print</button>
       </div>
-      <section class="card" style="margin-bottom:16px"><div class="card-head"><h2>Delivery route</h2><span class="muted small">Sorted by address</span></div>${table(sheet.delivery, true)}</section>
+      ${stops.length ? routeCard(stops, route, stale) : ""}
+      <section class="card" style="margin-bottom:16px"><div class="card-head"><h2>Delivery route</h2><span class="muted small">${route ? "In driving order" : "Sorted by address"}</span></div>${table(deliveryRows, true)}</section>
       <section class="card"><div class="card-head"><h2>Pickups</h2></div>${table(sheet.pickup, false)}</section>`;
     },
 
@@ -872,7 +1138,9 @@
     const ordersTab = $('#tabs [data-tab="orders"]');
     if (ordersTab) ordersTab.innerHTML = `Orders${n ? ` <span class="tab-badge" aria-label="${n} new">${n}</span>` : ""}`;
     document.title = `${n ? `(${n}) ` : ""}${db.settings.businessName || "Fuel by Buzah"} — Meal Prep Manager`;
+    if (routeMap) { routeMap.remove(); routeMap = null; }
     $("#app").innerHTML = ui.onboarding ? onboardingView() : views[ui.tab]();
+    if (ui.tab === "deliveries" && $("#route-map")) drawRouteMap();
   }
 
   // ---------- Login & first-run screens (cloud mode) ----------
@@ -1222,6 +1490,11 @@
       persist({ type: "settings", settings: db.settings }).then((ok) => ok && toast("Settings saved."));
     },
 
+    route(form) {
+      if (ui.routeBusy) return;
+      planDeliveryRoute(String(new FormData(form).get("start") || "").trim());
+    },
+
     async ordering(form) {
       const fd = new FormData(form);
       const slug = String(fd.get("slug") || "").trim().toLowerCase();
@@ -1280,6 +1553,7 @@
   });
 
   document.addEventListener("input", (e) => {
+    if (e.target.id === "rt-start") ui.routeStartText = e.target.value;
     const form = e.target.closest("#order-form");
     if (!form) return;
     readOrderForm(form);
@@ -1369,5 +1643,6 @@
     if (ui.cloudAvailable && !cloudReady) toast("Couldn't reach the cloud — using this browser's data for now.");
   }
 
+  ui.route = readJSON(ROUTE_KEY, null);
   boot();
 })();

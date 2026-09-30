@@ -40,7 +40,9 @@ test("fromRow coerces Postgres numeric strings and timestamps", () => {
 test("meals default to active and customers default empty strings", () => {
   assert.equal(S.toRow.meals({ id: "m", name: "x", price: 1 }).active, true);
   assert.equal(S.toRow.meals({ id: "m", name: "x", price: 1, active: false }).active, false);
-  assert.deepEqual(S.toRow.customers({ id: "c", name: "Ava" }), { id: "c", name: "Ava", phone: "", address: "", targets: {} });
+  assert.deepEqual(S.toRow.customers({ id: "c", name: "Ava" }), { id: "c", name: "Ava", phone: "", address: "", targets: {}, geo: null });
+  const geo = { q: "1 main st", lat: 29.7, lng: -95.4 };
+  assert.deepEqual(S.fromRow.customers({ id: "c", name: "Ava", geo }).geo, geo);
 });
 
 test("isValidDb / isEmpty", () => {
