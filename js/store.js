@@ -241,6 +241,12 @@
         }
       },
 
+      /** Asks the database to push a test notification to the owner's ntfy topic. */
+      async sendTestAlert() {
+        const { error } = await sb.rpc("send_test_alert");
+        if (error) throw new Error(error.message);
+      },
+
       /** Calls `onChange()` whenever any of this owner's rows change on any device. */
       subscribe(onChange) {
         if (channel) sb.removeChannel(channel);

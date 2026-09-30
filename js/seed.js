@@ -23,6 +23,9 @@
       acceptCash: true,
       cashApp: "",
       zelle: "",
+      alertsEnabled: false,
+      ntfyTopic: "",
+      managerUrl: "",
     };
   }
 

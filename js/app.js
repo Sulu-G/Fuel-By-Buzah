@@ -296,6 +296,70 @@
       </section>`;
   }
 
+  /** Long random ntfy topic. It works like a password, so it must not be guessable. */
+  function newAlertTopic() {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    const bytes = new Uint8Array(20);
+    crypto.getRandomValues(bytes);
+    return "fbb-" + Array.from(bytes, (b) => chars[b % chars.length]).join("");
+  }
+
+  /** The manager's own address, so tapping an alert opens it. Only https is accepted by the database. */
+  const managerUrl = () => (location.protocol === "https:" ? location.href.split("#")[0] : "");
+
+  /** Settings card: push alerts to the owner's phone via the free ntfy app. */
+  function alertsCard() {
+    if (!store || store.mode !== "cloud") return "";
+    const s = db.settings;
+    const on = !!(s.alertsEnabled && s.ntfyTopic);
+    return `
+      <section class="card">
+        <div class="card-head"><h2>Phone alerts</h2>${on ? '<span class="badge pickup">On</span>' : ""}</div>
+        ${on ? `
+          <ol class="steps">
+            <li>Install the free <strong>ntfy</strong> app:
+              <a href="https://apps.apple.com/us/app/ntfy/id1625396347" target="_blank" rel="noopener">iPhone</a> ·
+              <a href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" target="_blank" rel="noopener">Android</a></li>
+            <li>In the app, tap <strong>+</strong>, paste this topic and tap <strong>Subscribe</strong>. Keep it private, because anyone who has it can see your alerts.
+              <div class="link-box" style="margin-top:6px"><input type="text" readonly value="${esc(s.ntfyTopic)}" id="alert-topic" aria-label="Alert topic" />
+                <button class="btn btn-ghost btn-sm" type="button" data-action="copy-topic">Copy</button></div></li>
+            <li>Allow notifications when the app asks, then
+              <button class="btn btn-sm" type="button" data-action="test-alert">Send test alert</button></li>
+          </ol>
+          <div class="btn-row" style="margin-top:12px">
+            <button class="btn btn-ghost btn-sm" type="button" data-action="alerts-off">Turn off alerts</button>
+            <button class="btn btn-ghost btn-sm" type="button" data-action="alerts-new-topic">${ui.confirming === "alerts-new-topic" ? "Click again: your phone must re-subscribe" : "Get a new topic"}</button>
+          </div>
+          <p class="small muted" style="margin:12px 0 0">Alerts show the customer's first name, meal count, total and day. They pass through ntfy.sh and are deleted after 12 hours.</p>`
+        : `
+          <p class="muted">Get a notification on your phone the moment a customer places an online order. It's free and uses the ntfy app, with no account needed.</p>
+          <button class="btn" type="button" data-action="alerts-on">Turn on alerts</button>`}
+      </section>`;
+  }
+
+  /**
+   * Copy an input's text. The async Clipboard API can hang if a permission
+   * prompt is never answered, so fall back to the classic select-and-copy.
+   */
+  function copyFrom(selector, message) {
+    const input = $(selector);
+    if (!input) return;
+    const fallback = () => {
+      input.focus();
+      input.select();
+      let copied = false;
+      try { copied = document.execCommand("copy"); } catch (_) { /* ignore */ }
+      toast(copied ? message : "Selected. Press Ctrl+C (or Cmd+C) to copy.");
+    };
+    if (!navigator.clipboard || !window.isSecureContext) return fallback();
+    let settled = false;
+    const timer = setTimeout(() => { if (!settled) { settled = true; fallback(); } }, 800);
+    navigator.clipboard.writeText(input.value).then(
+      () => { if (!settled) { settled = true; clearTimeout(timer); toast(message); } },
+      () => { if (!settled) { settled = true; clearTimeout(timer); fallback(); } }
+    );
+  }
+
   function errorBox(key) {
     const errs = ui.errors[key];
     if (!errs || !errs.length) return "";
@@ -615,6 +679,7 @@
       return `
       <div class="grid grid-2">
         ${onlineOrderingCard()}
+        ${alertsCard()}
         <section class="card">
           <div class="card-head"><h2>Business &amp; pricing</h2></div>
           <form data-form="settings" novalidate>
@@ -956,12 +1021,42 @@
       render();
       persist({ type: "upsert", kind: "orders", row: o });
     },
-    "copy-link": () => {
-      const input = $("#shop-link");
-      if (!input) return;
-      const done = () => toast("Link copied.");
-      if (navigator.clipboard) navigator.clipboard.writeText(input.value).then(done, () => { input.select(); document.execCommand("copy"); done(); });
-      else { input.select(); document.execCommand("copy"); done(); }
+    "copy-link": () => copyFrom("#shop-link", "Link copied."),
+    "alerts-on": () => {
+      db.settings = { ...db.settings, alertsEnabled: true, ntfyTopic: db.settings.ntfyTopic || newAlertTopic(), managerUrl: managerUrl() || db.settings.managerUrl || "" };
+      render();
+      persist({ type: "settings", settings: db.settings }).then((ok) => ok && toast("Alerts on. Now set up the ntfy app on your phone."));
+    },
+    "alerts-off": () => {
+      db.settings = { ...db.settings, alertsEnabled: false };
+      render();
+      persist({ type: "settings", settings: db.settings }).then((ok) => ok && toast("Alerts off."));
+    },
+    "alerts-new-topic": () => {
+      if (ui.confirming !== "alerts-new-topic") { ui.confirming = "alerts-new-topic"; render(); return; }
+      ui.confirming = null;
+      db.settings = { ...db.settings, ntfyTopic: newAlertTopic() };
+      render();
+      persist({ type: "settings", settings: db.settings }).then((ok) => ok && toast("New topic saved. Subscribe to it in the ntfy app."));
+    },
+    "copy-topic": () => copyFrom("#alert-topic", "Topic copied."),
+    "test-alert": async (el) => {
+      el.disabled = true;
+      el.textContent = "Sending…";
+      const url = managerUrl();
+      if (url && url !== db.settings.managerUrl) {
+        db.settings = { ...db.settings, managerUrl: url };
+        await persist({ type: "settings", settings: db.settings });
+      }
+      try {
+        await store.sendTestAlert();
+        toast("Test alert sent. Check your phone; it can take a few seconds.");
+      } catch (err) {
+        toast(`Couldn't send: ${err.message}`);
+      } finally {
+        el.disabled = false;
+        el.textContent = "Send test alert";
+      }
     },
     "order-for": (el) => {
       ui.orderDraft = { ...newDraft(), customerId: el.dataset.id };

@@ -308,6 +308,8 @@ button.badge:hover { filter: brightness(0.95); }
 .warn-text { color: var(--warn); font-weight: 600; margin-top: 4px; }
 .link-box { display: flex; gap: 6px; }
 .link-box input { flex: 1; min-width: 0; font-size: 0.85rem; }
+ol.steps { margin: 0; padding-left: 20px; display: grid; gap: 12px; font-size: 0.92rem; }
+ol.steps a { font-weight: 650; }
 label.check { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; font-weight: 600; color: var(--text); cursor: pointer; }
 label.check input { accent-color: var(--accent); width: 16px; height: 16px; }
 

@@ -48,7 +48,20 @@ Spreadsheets got messy fast, so I built a tool that follows this cycle directly.
 - **Owner approval.** Online orders arrive as *pending*, with a live alert, a tab badge and a count in the browser tab. The owner confirms or declines each one, and only confirmed orders count toward prep, deliveries and revenue.
 - **Payments outside the app.** Customers pick Cash App, Zelle or cash, and the confirmation screen shows the owner's handle plus an order reference for the note. The manager has a Paid toggle on every order.
 - **Returning customers are matched by phone number**, whatever the formatting. A public form can never overwrite a customer's saved details; it only fills in blanks.
+- **Phone alerts.** Every new online order pushes a notification to the owner's phone through the free [ntfy](https://ntfy.sh) app, e.g. *"New order: Keisha · 3 meals · $51.00 · delivery Sun, Oct 4"*. Tapping it opens the manager's Orders tab.
 - **Try it:** open `order.html?demo` for a demo that sends nothing.
+
+### How phone alerts work (`supabase/v3_order_alerts.sql`)
+
+An `AFTER INSERT` trigger on `orders` fires only for new **pending online** orders. It queues an HTTPS request with **pg_net**, Postgres's async HTTP client, to ntfy.sh, and ntfy pushes the notification to the phone.
+
+- **Never blocks an order.** The request is sent in the background after the order commits, and any error inside the trigger is swallowed.
+- **Minimal data.** The alert holds only the first name, meal count, total and delivery day. There is no address, phone number or last name.
+- **Unguessable topic.** The ntfy topic is a random 24-character string generated in the browser with `crypto.getRandomValues`. It is stored in the owner's settings, which RLS protects, and is never returned by `get_shop()`.
+- **Test button.** "Send test alert" calls an owner-only function, `send_test_alert()`, which uses the caller's own settings.
+- **Safe tap link.** The tap-through link must be `https://` or it's dropped.
+
+Why not SMS? US carriers shut down the free email-to-text gateways, and texting through a provider like Twilio now requires A2P 10DLC business registration. Push notifications are free and instant with no registration. SMS could be added later behind the same trigger.
 
 ### How the ordering page stays secure
 
@@ -61,7 +74,7 @@ Customers never get table access. The public page can call exactly two Postgres 
 
 Validation covers name, phone, address, allowed payment methods, whole quantities from 1 to 50, active meals from this shop only, no duplicate lines, and a maximum of 60 meals. There are also spam guards: at most 3 pending orders per phone and 100 per shop, plus a hidden honeypot field. The order-window rule lives in a private schema (`fuel_private`) that the public API can't reach.
 
-The SQL is covered by 42 tests. They include parity checks showing the database computes the **same week and the same total as `js/logic.js`** across 42 day/policy combinations and 40 randomized orders.
+The SQL is covered by 42 ordering tests and 16 alert tests. They include parity checks showing the database computes the **same week and the same total as `js/logic.js`** across 42 day/policy combinations and 40 randomized orders.
 
 ## Screenshots
 
@@ -88,7 +101,7 @@ How it works:
 
 To use your own Supabase project:
 
-1. Run `supabase/schema.sql`, then `supabase/v2_online_ordering.sql`, in the Supabase SQL Editor. Both are safe to re-run.
+1. Run `supabase/schema.sql`, then `supabase/v2_online_ordering.sql`, then `supabase/v3_order_alerts.sql`, in the Supabase SQL Editor. All three are safe to re-run.
 2. Create your login under **Authentication → Users → Add user**, then turn off public sign-ups.
 3. Put your project URL and **publishable** key in `js/config.js`. Never use a secret or service-role key there.
 
@@ -131,6 +144,7 @@ js/app.js             Manager UI: rendering, events, login, live sync, order inb
 js/order.js           Ordering page: menu, cart, macros, checkout
 supabase/schema.sql   Tables, Row Level Security policies, realtime
 supabase/v2_online_ordering.sql   Shops, order status/payments, public order functions
+supabase/v3_order_alerts.sql      Push alerts for new orders (trigger + pg_net + ntfy)
 tests/                Unit tests (node --test)
 ```
 
@@ -150,7 +164,8 @@ Design choices:
 
 ## Roadmap
 
-- Text/email alerts for new orders (Supabase Edge Function + Twilio)
+- SMS alerts via Twilio (once A2P 10DLC registration is approved)
+- Automatic "order confirmed" texts to customers (with opt-in)
 - Card payments with Stripe Checkout
 - Weekly revenue history chart
 - Route optimization for deliveries
