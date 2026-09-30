@@ -666,7 +666,9 @@
       bounds.push([p.lat, p.lng]);
     });
     if (route.line && route.line.length > 1) {
-      LF.polyline(route.line, { color: getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#e4572e", weight: 5, opacity: 0.85 }).addTo(routeMap);
+      // Charcoal casing under a lime line: readable on light map tiles, on brand.
+      LF.polyline(route.line, { color: "#121214", weight: 8, opacity: 0.85 }).addTo(routeMap);
+      LF.polyline(route.line, { color: "#C4FF57", weight: 4, opacity: 1 }).addTo(routeMap);
     }
     if (bounds.length) routeMap.fitBounds(bounds, { padding: [30, 30] });
   }
@@ -1141,7 +1143,7 @@
     const macros = L.orderMacros(o, menuById);
     $("#modal-body").innerHTML = `
       <div class="receipt-head">
-        <div><div class="biz" id="modal-title">${esc(s.businessName)}</div><div class="muted small">${esc(s.tagline || "")}</div></div>
+        <div style="display:flex;gap:12px;align-items:center"><img class="receipt-logo" src="img/logo-mono.png" alt="" /><div><div class="biz" id="modal-title">${esc(s.businessName)}</div><div class="muted small">${esc(s.tagline || "")}</div></div></div>
         <div class="right"><div><strong>Invoice ${invoiceNo(o)}</strong></div><div class="muted small">Issued ${longDate(o.createdOn)}</div></div>
       </div>
       <div class="receipt-meta">
@@ -1225,6 +1227,7 @@
     $("#brand-name").textContent = "Fuel by Buzah";
     $("#app").innerHTML = `
       <section class="card auth-card">
+        <div class="logo-banner"><img src="img/logo-full.png" alt="Fuel by Buzah" width="282" height="600" /></div>
         <h1>Sign in</h1>
         <p class="muted">Sign in to open your meal-prep manager. Your data syncs across your phone and computer.</p>
         ${message ? `<div class="errors" role="alert">${esc(message)}</div>` : ""}

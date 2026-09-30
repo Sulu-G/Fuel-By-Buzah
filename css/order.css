@@ -1,8 +1,46 @@
 /* Customer ordering page — builds on styles.css tokens. */
 
-body.shop { padding-bottom: 80px; }
+/* The customer page always uses the brand's dark look (charcoal + lime),
+   matching @buzahtheleo's content. Same contrast-checked values as dark mode. */
+body.shop {
+  --bg: #121214;
+  --surface: #1A1B1F;
+  --surface-2: #25262B;
+  --border: #3A3B42;
+  --text: #F5F5F0;
+  --muted: #96969B;
+  --accent: #C4FF57;
+  --accent-ink: #121214;
+  --accent-text: #C4FF57;
+  --accent-line: #C4FF57;
+  --accent-soft: #263016;
+  --good: #43C28A;
+  --good-soft: #17301F;
+  --warn: #E8C85A;
+  --warn-soft: #33291A;
+  --bad: #EF6B5D;
+  --bad-soft: #3A1C19;
+  --pick: #8DB8F2;
+  --pick-soft: #1C2A3D;
+  --protein: #FF6B3D;
+  --carbs: #6AA3F0;
+  --fat: #E8C85A;
+  --cal: #A594D1;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+  padding-bottom: 80px;
+}
+body.shop .topbar { background: #0B0B0D; border-bottom-color: #26272C; }
+.hero h1 .hl { color: var(--lime); }
+.confirm-check { background: rgba(232, 200, 90, 0.14) !important; color: var(--gold) !important; }
 
 .hero { padding: 20px 0 8px; }
+.hero-brand { display: flex; align-items: center; gap: 22px; margin-bottom: 14px; }
+.hero-logo { height: 150px; width: auto; flex: none; }
+@media (max-width: 600px) {
+  .hero-brand { flex-direction: column; text-align: center; gap: 10px; }
+  .hero-logo { height: 120px; }
+}
 .hero h1 { font-size: 1.7rem; letter-spacing: -0.02em; margin-bottom: 4px; }
 .hero p { color: var(--muted); margin: 0 0 14px; }
 
@@ -20,9 +58,9 @@ body.shop { padding-bottom: 80px; }
 
 .menu-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
 .menu-card { display: flex; flex-direction: column; gap: 8px; transition: border-color 0.15s; }
-.menu-card.in-cart { border-color: var(--accent); }
+.menu-card.in-cart { border-color: var(--accent-line); box-shadow: 0 0 0 1px var(--accent-line); }
 .menu-card h3 { margin: 0; font-size: 1.02rem; }
-.menu-card .price { font-weight: 800; color: var(--accent); font-variant-numeric: tabular-nums; }
+.menu-card .price { font-weight: 800; color: var(--accent-text); font-variant-numeric: tabular-nums; }
 .menu-card .top { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
 .menu-card .macros { margin-top: auto; }
 
@@ -38,7 +76,7 @@ body.shop { padding-bottom: 80px; }
 .stepper .add-label { font-size: 0.9rem; width: auto; padding: 0 14px; }
 .stepper .qty-menu-btn { width: 30px; font-size: 0.8rem; color: var(--muted); }
 .qty-box { display: inline-flex; align-items: stretch; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface); }
-.qty-box:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.qty-box:focus-within { outline: 2px solid var(--accent-line); outline-offset: 1px; }
 .qty-box .qty-input {
   width: 42px; border: 0; border-radius: 0; text-align: center; font-weight: 800; font-size: 1.05rem;
   padding: 0; background: transparent; font-variant-numeric: tabular-nums; outline: none;
@@ -53,7 +91,7 @@ body.shop { padding-bottom: 80px; }
   height: 38px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface);
   color: var(--text); font: inherit; font-weight: 700; cursor: pointer; font-variant-numeric: tabular-nums;
 }
-.qty-pop button:hover, .qty-pop button:focus-visible { background: var(--accent-soft); border-color: var(--accent); }
+.qty-pop button:hover, .qty-pop button:focus-visible { background: var(--accent-soft); border-color: var(--accent-line); }
 .qty-pop button.current { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .qty-pop button.remove { grid-column: 1 / -1; color: var(--bad); font-weight: 650; }
 
@@ -61,7 +99,7 @@ body.shop { padding-bottom: 80px; }
 
 .per-day { font-size: 0.85rem; color: var(--muted); margin-top: 8px; }
 details.goals { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
-details.goals summary { cursor: pointer; font-weight: 650; font-size: 0.9rem; color: var(--accent); }
+details.goals summary { cursor: pointer; font-weight: 650; font-size: 0.9rem; color: var(--accent-text); }
 details.goals .row { margin-top: 10px; }
 
 .hp { position: absolute !important; left: -10000px !important; width: 1px; height: 1px; overflow: hidden; }
@@ -71,8 +109,8 @@ details.goals .row { margin-top: 10px; }
   display: flex; gap: 10px; align-items: center; border: 1px solid var(--border); border-radius: 10px;
   padding: 10px 12px; cursor: pointer; color: var(--text); font-weight: 600;
 }
-.pay-options label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
-.pay-options input { accent-color: var(--accent); }
+.pay-options label:has(input:checked) { border-color: var(--accent-line); background: var(--accent-soft); }
+.pay-options input { accent-color: var(--accent-line); }
 .pay-options .muted { font-weight: 500; }
 
 .submit-btn { width: 100%; padding: 12px; font-size: 1.05rem; margin-top: 4px; }

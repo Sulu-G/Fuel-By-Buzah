@@ -121,8 +121,13 @@
     $("#shop").innerHTML = `
       ${isDemo ? `<div class="demo-note">Demo mode: this uses a sample menu and orders aren't sent anywhere. <a href="index.html">Open the manager app</a></div>` : ""}
       <section class="hero">
-        <h1>Build your week of meals</h1>
-        <p>Pick your meals, see your macros, and choose delivery or pickup.</p>
+        <div class="hero-brand">
+          <img class="hero-logo" src="img/logo-full.png" alt="Fuel by Buzah" width="282" height="600" />
+          <div>
+            <h1>Build your week of <span class="hl">meals</span></h1>
+            <p>Pick your meals, see your macros, and choose delivery or pickup.</p>
+          </div>
+        </div>
         <div id="window-banner">${windowBanner()}</div>
       </section>
 
@@ -337,7 +342,10 @@
     $("#cart-bar").hidden = true;
     $("#shop").innerHTML = `
       <section class="card confirm-card">
-        <div class="confirm-check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:12px">
+          <img src="img/logo-icon.png" alt="" style="height:64px;width:auto" />
+          <div class="confirm-check" style="margin:0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
+        </div>
         <h1>Order received!</h1>
         <p>Thanks, ${esc(contact.name.split(" ")[0])}. ${esc(r.businessName)} will text you at <strong>${esc(contact.phone)}</strong> to confirm.</p>
         <div class="receipt-meta">

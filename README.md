@@ -1,3 +1,5 @@
+<p align="center"><img src="img/logo-full.png" alt="Fuel by Buzah" height="220" /></p>
+
 # Fuel by Buzah — Meal Prep Manager
 
 A web app for running a small weekly meal-prep business. It has two sides:
@@ -35,6 +37,7 @@ Spreadsheets got messy fast, so I built a tool that follows this cycle directly.
 - **Demo mode.** Visitors click *Explore the demo* to try the full app on sample data stored in their own browser. Nothing touches the real database.
 - **First-run migration.** On first sign-in, the app offers to copy data from the browser, load demo data, start blank or import a backup.
 - **Backups.** Export and import JSON anytime.
+- **On brand.** Uses the Buzah colorway: lime `#C4FF57` on charcoal `#121214`. Every text/background pair meets WCAG AA contrast. On light backgrounds, lime is used only as a fill with dark text, and text accents switch to olive. The customer page is always in the brand's dark look.
 - **Responsive, with dark mode.** Works on a phone at the stove or a laptop at the desk.
 
 ## Online ordering (v2)
@@ -162,6 +165,7 @@ js/store.js           Storage layer: LocalStore (browser) + CloudStore (Supabase
 js/route.js           Route optimizer: geocoding, OSRM matrix, exact + heuristic solver, Google Maps legs
 js/config.js          Supabase URL + publishable key
 js/app.js             Manager UI: rendering, events, login, live sync, order inbox
+img/                  Logo (full, icon, one-color for print) and app icons
 js/order.js           Ordering page: menu, cart, macros, checkout
 supabase/schema.sql   Tables, Row Level Security policies, realtime
 supabase/v2_online_ordering.sql   Shops, order status/payments, public order functions
