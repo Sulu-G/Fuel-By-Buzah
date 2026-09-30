@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fuel by Buzah — Meal Prep Manager</title>
+  <meta name="description" content="Weekly meal-prep orders, macros, shopping lists, delivery sheets and invoices." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23e4572e'/><path d='M58 12 28 56h20l-6 32 30-46H52z' fill='white'/></svg>" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 100 100"><path d="M58 12 28 56h20l-6 32 30-46H52z" fill="currentColor"/></svg>
+        </span>
+        <div>
+          <div class="brand-name" id="brand-name">Fuel by Buzah</div>
+          <div class="brand-sub">Meal Prep Manager</div>
+        </div>
+      </div>
+      <div class="week-nav" aria-label="Choose week">
+        <button class="icon-btn" data-action="week-prev" aria-label="Previous week">‹</button>
+        <div class="week-label">
+          <div id="week-title">Week of —</div>
+          <div class="muted small" id="week-sub"></div>
+        </div>
+        <button class="icon-btn" data-action="week-next" aria-label="Next week">›</button>
+        <button class="btn btn-ghost btn-sm" data-action="week-today">This week</button>
+      </div>
+    </div>
+    <nav class="tabs" id="tabs" aria-label="Sections">
+      <button data-tab="dashboard">Dashboard</button>
+      <button data-tab="orders">Orders</button>
+      <button data-tab="menu">Menu</button>
+      <button data-tab="customers">Customers</button>
+      <button data-tab="prep">Saturday Prep</button>
+      <button data-tab="deliveries">Sunday Deliveries</button>
+      <button data-tab="settings">Settings</button>
+    </nav>
+  </header>
+
+  <main id="app" class="container" tabindex="-1"></main>
+
+  <div class="modal" id="modal" hidden>
+    <div class="modal-backdrop" data-action="close-modal"></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <footer class="footer container muted small">
+    Data is saved in this browser only. Use Settings → Export to back it up.
+  </footer>
+
+  <script src="js/logic.js"></script>
+  <script src="js/seed.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

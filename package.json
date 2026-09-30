@@ -1,0 +1,11 @@
+{
+  "name": "fuel-by-buzah",
+  "version": "1.0.0",
+  "description": "Meal-prep order manager: weekly orders, macros, shopping lists, delivery sheets and invoices. Vanilla JS, no build step.",
+  "private": true,
+  "scripts": {
+    "test": "node --test",
+    "start": "npx --yes serve ."
+  },
+  "license": "MIT"
+}
