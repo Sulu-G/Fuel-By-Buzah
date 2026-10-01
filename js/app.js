@@ -49,6 +49,11 @@
     routeBusy: false,
     routeStatus: "",
     routeStartText: "",
+    recalls: null, // { alerts, lastRun, loadedAt } from the nightly recall check (cloud mode)
+    recallsLoading: false,
+    recallsError: "",
+    recallCheck: null, // { status, message } while "Check now" runs
+    recallShowHidden: false,
   };
 
   const isValidDb = S.isValidDb;
@@ -688,6 +693,189 @@
   }
 
   // ---------- Views ----------
+  // ---------- Food recall check (Saturday Prep) ----------
+  const R = window.FuelRecalls;
+  const recallsOn = () => db.settings.recallChecks !== false;
+
+  /** Alerts to show: live rows in cloud mode, clearly-marked examples in the browser demo. */
+  function recallData() {
+    if (store && store.mode === "cloud") {
+      return { alerts: ui.recalls ? ui.recalls.alerts : [], lastRun: ui.recalls ? ui.recalls.lastRun : null, demo: false };
+    }
+    if (!ui.sampleRecalls) ui.sampleRecalls = R.sampleAlerts();
+    return { alerts: ui.sampleRecalls, lastRun: null, demo: true };
+  }
+
+  async function loadRecalls(force) {
+    if (!store || store.mode !== "cloud" || !store.getRecalls || ui.recallsLoading) return;
+    if (!force && ui.recalls && Date.now() - ui.recalls.loadedAt < 5 * 60 * 1000) return;
+    ui.recallsLoading = true;
+    try {
+      const r = await store.getRecalls();
+      ui.recalls = { ...r, loadedAt: Date.now() };
+      ui.recallsError = "";
+    } catch (err) {
+      ui.recallsError = err.message;
+    } finally {
+      ui.recallsLoading = false;
+    }
+    if (db && (ui.tab === "prep" || ui.tab === "dashboard")) render();
+  }
+
+  function fmtStamp(ts) {
+    const d = new Date(ts);
+    return isNaN(d) ? "" : d.toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  }
+
+  function recallItem(a, onList, compact) {
+    const hz = R.hazardInfo(a.hazard);
+    const cls = R.classInfo(a.classification);
+    const src = R.SOURCES[a.source] || R.SOURCES.fda;
+    const tone = cls ? cls.tone : "muted";
+    const key = `${a.id}|${a.ingredient}`;
+    const product = a.product.length > 220 ? a.product.slice(0, 217) + "…" : a.product;
+    return `
+      <li class="recall ${compact ? "compact" : ""} tone-${tone}" data-recall="${esc(key)}">
+        <div class="recall-top">
+          <div class="recall-tags">
+            ${cls ? `<span class="badge cls-${tone}">${esc(cls.label)}</span>` : `<span class="badge">Unclassified</span>`}
+            <span class="badge hz${hz.severe ? " hz-severe" : ""}">${esc(hz.label)}</span>
+            ${onList ? '<span class="badge onlist">On this week\'s list</span>' : ""}
+            ${a.sample ? '<span class="badge">Example</span>' : ""}
+          </div>
+          <button class="btn btn-ghost btn-sm no-print" type="button" data-action="${a.dismissed ? "recall-restore" : "recall-dismiss"}" data-id="${esc(a.id)}" data-ingredient="${esc(a.ingredient)}">${a.dismissed ? "Show again" : "Hide"}</button>
+        </div>
+        <div class="recall-match">Matches your <strong>${esc(a.ingredient)}</strong>${a.match === "related" ? " (the product contains it)" : ""}</div>
+        <div class="recall-product">${esc(product)}</div>
+        <div class="recall-meta muted small">${esc(a.firm || "Unknown firm")} · ${a.recallDate ? `recalled ${esc(shortDate(a.recallDate))}` : "date not listed"} · ${esc(R.texasLine(a.affectsTx))} · ${esc(src.name)} ${esc(a.recallNumber)}</div>
+        ${compact ? "" : `<p class="recall-risk"><strong>Health risk:</strong> ${esc(hz.risk)}</p>`}
+        <details class="recall-more">
+          <summary>${compact ? "Health risk, lot codes &amp; what to do" : "Lot codes, reason &amp; what to do"}</summary>
+          ${compact ? `<p><strong>Health risk:</strong> ${esc(hz.risk)}</p>` : ""}
+          ${cls ? `<p><strong>${esc(cls.label)}:</strong> ${esc(cls.meaning)}</p>` : ""}
+          <p><strong>Reason given:</strong> ${esc(a.reason || "Not stated.")}</p>
+          ${a.codeInfo ? `<p><strong>Check these codes:</strong> ${esc(a.codeInfo)}</p>` : ""}
+          ${a.distribution ? `<p><strong>Where it was sold:</strong> ${esc(a.distribution)}</p>` : ""}
+          ${a.product.length > 220 ? `<p><strong>Full description:</strong> ${esc(a.product)}</p>` : ""}
+          <p><strong>What to do</strong></p>
+          <ul>${R.WHAT_TO_DO.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>
+          <p class="small"><a href="${esc(/^https:\/\//.test(a.url) ? a.url : src.url)}" target="_blank" rel="noopener">Official ${esc(src.name)} recall notices</a></p>
+        </details>
+      </li>`;
+  }
+
+  function recallCard(shoppingItems) {
+    if (!recallsOn()) {
+      return `<section class="card recall-card no-print"><div class="card-head"><h2>Recall check</h2><span class="badge">Off</span></div>
+        <p class="muted">Nightly food recall checks are turned off. <button class="btn btn-ghost btn-sm" data-action="goto" data-to="settings">Turn on in Settings</button></p></section>`;
+    }
+    const cloud = store && store.mode === "cloud";
+    if (cloud && !ui.recalls && !ui.recallsError) loadRecalls();
+    const { alerts, lastRun, demo } = recallData();
+    const g = R.organize(alerts, shoppingItems);
+    const listHits = g.direct.filter((a) => g.onList.has(a.ingredient.trim().toLowerCase()));
+    const checking = ui.recallCheck && ui.recallCheck.status === "running";
+
+    let head;
+    if (cloud && !ui.recalls && !ui.recallsError) head = `<span class="badge">Loading…</span>`;
+    else if (listHits.length) head = `<span class="badge cls-bad">${listHits.length} on this week's list</span>`;
+    else if (g.direct.length) head = `<span class="badge cls-warn">${g.direct.length} match${g.direct.length === 1 ? "" : "es"} on your menu</span>`;
+    else head = `<span class="badge paid">All clear</span>`;
+
+    const sourceLine = lastRun
+      ? `<span class="src ${lastRun.fdaOk ? "ok" : "fail"}">FDA ${lastRun.fdaOk ? "✓" : "✗ couldn't be reached"}</span>
+         <span class="src ${lastRun.usdaOk ? "ok" : "fail"}">USDA ${lastRun.usdaOk ? "✓" : `✗ not reachable from the server, <a href="${R.SOURCES.usda.url}" target="_blank" rel="noopener">check meat &amp; poultry recalls</a>`}</span>`
+      : "";
+
+    const status = demo
+      ? `<p class="small muted recall-status">Demo mode: these are made-up <strong>examples</strong> so you can see how alerts look. With cloud sync on, the database checks official FDA recalls every night at 8 PM Central against your menu.</p>`
+      : `<p class="small muted recall-status">
+          ${lastRun ? `Last checked ${esc(fmtStamp(lastRun.ranAt))}: ${lastRun.recallsChecked} active recalls against ${lastRun.ingredientsChecked} menu ingredients.` : "No check has run yet."}
+          Next automatic check: ${esc(R.nextCheckLabel())}.
+          ${sourceLine ? `<br />${sourceLine}` : ""}
+        </p>`;
+
+    return `
+      <section class="card recall-card" id="recalls">
+        <div class="card-head"><h2>Recall check</h2>${head}</div>
+        ${status}
+        ${ui.recallsError ? `<div class="errors" role="alert">Couldn't load recalls: ${esc(ui.recallsError)}</div>` : ""}
+        ${ui.recallCheck && ui.recallCheck.message ? `<p class="small recall-progress" role="status">${esc(ui.recallCheck.message)}</p>` : ""}
+        ${cloud ? `<div class="btn-row no-print" style="margin-bottom:10px"><button class="btn btn-sm" type="button" data-action="recall-check" ${checking ? "disabled" : ""}>${checking ? "Checking…" : "Check now"}</button></div>` : ""}
+        ${g.direct.length ? `<ul class="recall-list">${g.direct.map((a) => recallItem(a, g.onList.has(a.ingredient.trim().toLowerCase()))).join("")}</ul>`
+          : (!cloud || ui.recalls) ? `<p class="recall-clear">No active recall is for an item on your menu.</p>` : ""}
+        ${g.related.length ? `<details class="recall-related">
+            <summary>${g.related.length} possibly related: products that contain one of your ingredients</summary>
+            <p class="small muted">These recalls are for prepared foods (sauces, snacks, salads…) that list your ingredient. They matter only if you buy that exact product.</p>
+            <ul class="recall-list">${g.related.map((a) => recallItem(a, false, true)).join("")}</ul>
+          </details>` : ""}
+        ${g.hidden.length ? `<button class="btn btn-ghost btn-sm no-print" type="button" data-action="recall-toggle-hidden" style="margin-top:8px">${ui.recallShowHidden ? "Hide" : "Show"} ${g.hidden.length} hidden</button>
+          ${ui.recallShowHidden ? `<ul class="recall-list">${g.hidden.map((a) => recallItem(a, false, true)).join("")}</ul>` : ""}` : ""}
+        <p class="small muted" style="margin:10px 0 0">Recall data comes from the U.S. FDA (openFDA). Health information is summarized from the CDC and FDA. It's general information, not medical advice.</p>
+      </section>`;
+  }
+
+  /** Settings card: turn the nightly recall check on/off. */
+  function recallSettingsCard() {
+    const on = recallsOn();
+    const cloud = store && store.mode === "cloud";
+    const alertsReady = !!(db.settings.alertsEnabled && db.settings.ntfyTopic);
+    return `
+      <section class="card">
+        <div class="card-head"><h2>Food recall check</h2>${on ? '<span class="badge pickup">On</span>' : '<span class="badge">Off</span>'}</div>
+        <p class="muted">Every night at 8 PM Central, official FDA food recalls are checked against the ingredients on your active menu. On Friday night (before Saturday shopping) you get a summary for this week's shopping list. Other nights you're only alerted if something new matches.</p>
+        <ul class="small muted" style="margin:0 0 12px;padding-left:18px">
+          <li>Results show on the <strong>Saturday Prep</strong> tab, with the health risk explained.</li>
+          <li>${cloud ? (alertsReady ? "Push alerts go to your phone through the ntfy app (set up under Phone alerts)." : "Turn on <strong>Phone alerts</strong> to get these on your phone. Without them, check the Prep tab.") : "Needs cloud sync. The demo shows examples."}</li>
+          <li>USDA meat &amp; poultry recalls are checked too when USDA's server allows it. Otherwise the app links you to <a href="https://www.fsis.usda.gov/recalls" target="_blank" rel="noopener">fsis.usda.gov/recalls</a>.</li>
+        </ul>
+        <button class="btn ${on ? "btn-ghost" : ""}" type="button" data-action="recall-toggle">${on ? "Turn off recall checks" : "Turn on recall checks"}</button>
+      </section>`;
+  }
+
+  async function setRecallDismissed(id, ingredient, dismissed) {
+    const { alerts, demo } = recallData();
+    const a = alerts.find((x) => x.id === id && x.ingredient === ingredient);
+    if (!a) return;
+    a.dismissed = dismissed;
+    render();
+    if (demo) return;
+    try {
+      await store.dismissRecall(id, ingredient, dismissed);
+      if (dismissed) toast("Hidden. It won't be in Friday's summary.");
+    } catch (err) {
+      a.dismissed = !dismissed;
+      render();
+      toast(`Couldn't save: ${err.message}`);
+    }
+  }
+
+  async function runRecallCheckNow() {
+    if (!store || store.mode !== "cloud" || (ui.recallCheck && ui.recallCheck.status === "running")) return;
+    ui.recallCheck = { status: "running", message: "Downloading the latest FDA recalls…" };
+    render();
+    try {
+      const batch = await store.runRecallCheck();
+      const started = Date.now();
+      let st = null;
+      while (Date.now() - started < 170000) {
+        await new Promise((r) => setTimeout(r, 4000));
+        st = await store.recallCheckStatus(batch);
+        if (st.done) break;
+        ui.recallCheck.message = "Matching recalls against your menu…";
+        if (ui.tab === "prep") render();
+      }
+      if (!st || !st.done) throw new Error("The recall sources are slow right now. Try again in a few minutes.");
+      ui.recallCheck = { status: "done", message: "" };
+      await loadRecalls(true);
+      const n = ui.recalls ? ui.recalls.alerts.filter((a) => !a.dismissed && a.match !== "related").length : 0;
+      toast(st.fdaOk ? `Checked ${st.fdaCount} FDA recalls: ${n ? `${n} match${n === 1 ? "" : "es"} on your menu.` : "nothing matches your menu."}` : "FDA couldn't be reached. Try again later.");
+    } catch (err) {
+      ui.recallCheck = { status: "error", message: `Check failed: ${err.message}` };
+    }
+    render();
+  }
+
   const views = {
     dashboard() {
       const { menuById, customersById, weekOrders, s } = ctx();
@@ -934,12 +1122,15 @@
       const list = L.shoppingList(weekOrders, menuById);
       const totalMeals = counts.reduce((n, c) => n + c.qty, 0);
       const key = (r) => `${ui.weekOf}|${r.item}|${r.unit}`;
+      const recallG = recallsOn() ? R.organize(recallData().alerts, list.map((r) => r.item)) : null;
+      const flagged = (item) => recallG && recallG.byIngredient.get(String(item).trim().toLowerCase());
 
       return `
       <div class="page-head">
         <div><h1>Saturday prep</h1><p class="muted">${longDate(sched.shopDay)} · shop &amp; prep for ${weekOrders.length} orders</p></div>
         <button class="btn btn-ghost no-print" data-action="print">Print</button>
       </div>
+      ${recallCard(list.map((r) => r.item))}
       <div class="grid grid-2">
         <section class="card">
           <div class="card-head"><h2>Cook list</h2><span class="badge">${totalMeals} meals</span></div>
@@ -955,8 +1146,9 @@
             <tbody>${list.map((r) => {
               const k = key(r);
               const done = ui.checked.has(k);
-              return `<tr class="${done ? "checked" : ""}"><td><input type="checkbox" data-check="${esc(k)}" ${done ? "checked" : ""} aria-label="Got ${esc(r.item)}" /></td>
-                <td>${esc(r.item)}</td><td class="right num">${fmtQty(r.qty)} ${r.unit === "ea" ? "" : esc(r.unit)}</td>
+              const hits = flagged(r.item);
+              return `<tr class="${done ? "checked" : ""}${hits ? " recalled" : ""}"><td><input type="checkbox" data-check="${esc(k)}" ${done ? "checked" : ""} aria-label="Got ${esc(r.item)}" /></td>
+                <td>${esc(r.item)}${hits ? ` <a class="badge cls-bad recall-flag" href="#recalls" data-action="recall-jump" title="${esc(hits.map((a) => `${a.firm}: ${R.hazardInfo(a.hazard).label}`).join("; "))}">Recall: check brand</a>` : ""}</td><td class="right num">${fmtQty(r.qty)} ${r.unit === "ea" ? "" : esc(r.unit)}</td>
                 <td class="muted small">${esc(r.usedIn.join(", "))}</td></tr>`;
             }).join("")}</tbody>
           </table></div>` : `<div class="empty">Nothing to buy yet.</div>`}
@@ -1022,6 +1214,7 @@
       <div class="grid grid-2">
         ${onlineOrderingCard()}
         ${alertsCard()}
+        ${recallSettingsCard()}
         <section class="card">
           <div class="card-head"><h2>Business &amp; pricing</h2></div>
           <form data-form="settings" novalidate>
@@ -1390,6 +1583,16 @@
       persist({ type: "settings", settings: db.settings }).then((ok) => ok && toast("New topic saved. Subscribe to it in the ntfy app."));
     },
     "copy-topic": () => copyFrom("#alert-topic", "Topic copied."),
+    "recall-toggle": () => {
+      db.settings = { ...db.settings, recallChecks: !recallsOn() };
+      render();
+      persist({ type: "settings", settings: db.settings }).then((ok) => ok && toast(recallsOn() ? "Recall checks on. They run nightly at 8 PM Central." : "Recall checks off."));
+    },
+    "recall-dismiss": (el) => setRecallDismissed(el.dataset.id, el.dataset.ingredient, true),
+    "recall-restore": (el) => setRecallDismissed(el.dataset.id, el.dataset.ingredient, false),
+    "recall-toggle-hidden": () => { ui.recallShowHidden = !ui.recallShowHidden; render(); },
+    "recall-jump": () => { const c = $("#recalls"); if (c) c.scrollIntoView({ behavior: "smooth", block: "start" }); },
+    "recall-check": () => runRecallCheckNow(),
     "test-alert": async (el) => {
       el.disabled = true;
       el.textContent = "Sending…";

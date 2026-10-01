@@ -24,6 +24,7 @@
       cashApp: "",
       zelle: "",
       alertsEnabled: false,
+      recallChecks: true, // nightly FDA/USDA recall check against the menu (cloud mode)
       ntfyTopic: "",
       managerUrl: "",
     };

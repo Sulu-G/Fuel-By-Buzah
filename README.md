@@ -31,6 +31,7 @@ Spreadsheets got messy fast, so I built a tool that follows this cycle directly.
 - **Invoices.** Each order produces a clean invoice that you can print or save as a PDF.
 - **Macros built in.** Every meal stores calories, protein, carbs and fat. Each customer card shows how much of their daily targets the week's meals cover.
 - **Saturday prep.** Shows a cook list (how many of each meal to make) and a shopping list. The shopping list combines ingredients across all orders, e.g. *jasmine rice: 20 cup, used in 2 meals*. You can check items off as you shop.
+- **Nightly food recall check.** Every night at 8 PM Central the database checks official FDA food recalls against the ingredients on your menu. Friday night (before Saturday shopping) you get a push summary for the week's shopping list. Each match explains the health risk in plain language, flags the item on the shopping list, and shows the lot codes to compare in the store.
 - **Sunday deliveries with route optimization.** One tap plans the fastest driving order from your current location. It shows a map with numbered stops, total miles and drive time, and a drive-time column, then hands the route to Google Maps for turn-by-turn directions. The pickup list is separate, and customers with no address on file are flagged.
 - **Menu management.** Ingredients are typed in plain text (`0.4 lb chicken breast`). Removing a meal from the menu keeps it on file, so past invoices stay accurate.
 - **Cloud sync with a login.** Data lives in a Supabase Postgres database, protected by Row Level Security. Changes appear live on your phone and laptop through Supabase Realtime.
@@ -99,6 +100,20 @@ Fallbacks:
 - If an address can't be found, it's flagged and everything else is still routed.
 - If the map can't load, the ordered list still works.
 
+## Food recall check (`supabase/v5_recall_checks.sql`)
+
+Before shopping, it helps to know whether anything on the list has been recalled. The database does that check every night:
+
+1. **Download.** At 8 PM Central, `pg_cron` asks [openFDA's food enforcement API](https://open.fda.gov/apis/food/enforcement/) for every recall that is still *Ongoing* and was reported in the last 180 days, about 400 recalls. It also tries the [USDA FSIS recall API](https://www.fsis.usda.gov/recalls) for meat, poultry and eggs. FSIS currently blocks cloud servers, so when it can't be reached the app says so and links to [fsis.usda.gov/recalls](https://www.fsis.usda.gov/recalls) instead of pretending it checked.
+2. **Match.** Each recall's product text is compared with every ingredient on your active menu. Matching is word-aware: *berries* matches *blueberries*, but *rice* doesn't match *licorice* and *salmon* doesn't match *Salmonella*. Matches are split into two groups:
+   - **Direct:** the recalled product *is* that grocery item, e.g. "Organic Whole Blueberries, 10 oz".
+   - **Possibly related:** the product only *contains* it, e.g. "Blackberry Honey Spread" or a salad's ingredient list.
+   On real FDA data this cut 82 raw hits down to 13 direct ones. Only direct matches trigger push alerts.
+3. **Explain.** Each alert shows the FDA class (I = serious, II = temporary, III = unlikely to cause harm), the hazard (Listeria, Salmonella, E. coli, undeclared allergen, foreign material…) with symptoms, timing and who is most at risk (summarized from the CDC and FDA), whether it was sold in Texas, the lot and best-by codes to compare, and what to do.
+4. **Notify.** Friday night sends a summary for this week's shopping list (or "all clear"). Other nights send an alert only when a *new* direct match appears. Notifications use the same ntfy topic as order alerts. **Check now** on the Saturday Prep tab runs the same check on demand.
+
+Security: the alert tables are owner-only under Row Level Security. The app can change only the `dismissed` flag (to hide an alert it has reviewed). The download, matching and push functions live in a private schema that the API can't reach.
+
 ## Screenshots
 
 | Orders + live preview | Invoice |
@@ -108,6 +123,10 @@ Fallbacks:
 | Saturday prep | Customer macros (dark mode) |
 |---|---|
 | ![Prep](docs/screenshot-prep.png) | ![Customers](docs/screenshot-customers-dark.png) |
+
+| Recall check (Saturday prep) |
+|---|
+| ![Recall check](docs/screenshot-recalls.png) |
 
 ## Cloud sync (Supabase)
 
@@ -124,7 +143,7 @@ How it works:
 
 To use your own Supabase project:
 
-1. Run the files in `supabase/` in order (`schema.sql`, `v2_…`, `v3_…`, `v4_…`) in the Supabase SQL Editor. All of them are safe to re-run.
+1. Run the files in `supabase/` in order (`schema.sql`, `v2_…`, `v3_…`, `v4_…`, `v5_recall_checks.sql`, `v5_recall_schedule.sql`) in the Supabase SQL Editor. All of them are safe to re-run.
 2. Create your login under **Authentication → Users → Add user**, then turn off public sign-ups.
 3. Put your project URL and **publishable** key in `js/config.js`. Never use a secret or service-role key there.
 
@@ -163,6 +182,7 @@ js/logic.js           Pure business logic — used by the browser and by Node te
 js/seed.js            Demo data
 js/store.js           Storage layer: LocalStore (browser) + CloudStore (Supabase)
 js/route.js           Route optimizer: geocoding, OSRM matrix, exact + heuristic solver, Google Maps legs
+js/recalls.js         Recall helpers: plain-language health risks, FDA classes, grouping
 js/config.js          Supabase URL + publishable key
 js/app.js             Manager UI: rendering, events, login, live sync, order inbox
 img/                  Logo (full, icon, one-color for print) and app icons
@@ -171,6 +191,8 @@ supabase/schema.sql   Tables, Row Level Security policies, realtime
 supabase/v2_online_ordering.sql   Shops, order status/payments, public order functions
 supabase/v3_order_alerts.sql      Push alerts for new orders (trigger + pg_net + ntfy)
 supabase/v4_route_geo.sql         Saved map coordinates for customers
+supabase/v5_recall_checks.sql     Nightly FDA/USDA recall check: download, match, alerts, push
+supabase/v5_recall_schedule.sql   pg_cron schedule (8 PM Central nightly)
 tests/                Unit tests (node --test)
 ```
 

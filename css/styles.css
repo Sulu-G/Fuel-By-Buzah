@@ -430,5 +430,43 @@ input[type="email"], input[type="password"] {
   body.printing-modal .modal-card { box-shadow: none; max-height: none; width: 100%; padding: 0; }
 }
 
+
+/* ---------- Food recall check ---------- */
+.recall-card { margin-bottom: 16px; }
+.recall-status { margin: 0 0 10px; line-height: 1.55; }
+.recall-status .src { display: inline-block; margin-right: 12px; font-weight: 600; }
+.recall-status .src.ok { color: var(--good); }
+.recall-status .src.fail { color: var(--warn); }
+.recall-progress { color: var(--accent-text); font-weight: 600; margin: 0 0 8px; }
+.recall-clear { margin: 4px 0 0; color: var(--good); font-weight: 600; }
+.recall-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.recall { border: 1px solid var(--border); border-left: 4px solid var(--muted); border-radius: 10px; padding: 10px 12px; background: var(--surface); }
+.recall.tone-bad { border-left-color: var(--bad); }
+.recall.tone-warn { border-left-color: var(--warn); }
+.recall-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.recall-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.badge.cls-bad { background: var(--bad-soft); color: var(--bad); }
+.badge.cls-warn { background: var(--warn-soft); color: var(--warn); }
+.badge.hz-severe { background: var(--bad-soft); color: var(--bad); }
+.badge.onlist { background: var(--accent-soft); color: var(--accent-text); }
+.recall-match { margin-top: 8px; font-size: 0.92rem; }
+.recall-product { margin-top: 2px; font-weight: 650; overflow-wrap: anywhere; }
+.recall-meta { margin-top: 4px; overflow-wrap: anywhere; }
+.recall-risk { margin: 8px 0 0; font-size: 0.9rem; line-height: 1.5; }
+.recall-more { margin-top: 8px; font-size: 0.88rem; }
+.recall-more summary, .recall-related > summary { cursor: pointer; color: var(--accent-text); font-weight: 600; }
+.recall-more p, .recall-more ul { margin: 6px 0; line-height: 1.5; overflow-wrap: anywhere; }
+.recall-more ul { padding-left: 18px; }
+.recall-related { margin-top: 12px; }
+.recall-related > summary { padding: 6px 0; }
+.recall.compact .recall-product { font-weight: 600; font-size: 0.92rem; }
+tr.recalled td { background: var(--bad-soft); }
+.recall-flag { margin-left: 4px; text-decoration: none; }
+@media print {
+  .recall-more:not([open]) > *:not(summary) { display: block; }
+  .recall-related:not([open]) { display: none; }
+  tr.recalled td { background: none; }
+}
+
 /* Narrow phones: the calendar has its own "This week" button. */
 @media (max-width: 420px) { .week-nav > [data-action="week-today"] { display: none; } }

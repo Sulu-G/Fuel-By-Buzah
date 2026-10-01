@@ -146,6 +146,22 @@
     };
   }
 
+  function fromRecallRow(r) {
+    return {
+      id: r.id, ingredient: r.ingredient, match: r.match || "direct", source: r.source, recallNumber: r.recall_number,
+      product: r.product, firm: r.firm, reason: r.reason, hazard: r.hazard, classification: r.classification,
+      status: r.status, recallDate: r.recall_date, distribution: r.distribution, affectsTx: r.affects_tx,
+      codeInfo: r.code_info, url: r.url, dismissed: !!r.dismissed, firstSeen: r.first_seen, lastSeen: r.last_seen,
+    };
+  }
+
+  function fromRunRow(r) {
+    return {
+      ranAt: r.ran_at, kind: r.kind, fdaOk: r.fda_ok, usdaOk: r.usda_ok, recallsChecked: r.recalls_checked,
+      ingredientsChecked: r.ingredients_checked, matches: r.matches, newMatches: r.new_matches,
+    };
+  }
+
   // ---------- Cloud backend (Supabase) ----------
 
   function createCloudStore(config, supabaseLib, defaultSettings) {
@@ -249,6 +265,35 @@
         if (error) throw new Error(error.message);
       },
 
+      // ----- Food recall checks (filled in nightly by the database; see supabase/v5) -----
+
+      /** Active, matching recalls (newest first) and the latest check's status. */
+      async getRecalls() {
+        const [a, r] = await Promise.all([
+          sb.from("recall_alerts").select("*").eq("active", true).order("recall_date", { ascending: false }).limit(300),
+          sb.from("recall_runs").select("*").order("ran_at", { ascending: false }).limit(1),
+        ]);
+        [a, r].forEach(check);
+        return { alerts: a.data.map(fromRecallRow), lastRun: r.data[0] ? fromRunRow(r.data[0]) : null };
+      },
+
+      /** Starts a check now. Returns a batch id to poll with recallCheckStatus(). */
+      async runRecallCheck() {
+        const { data, error } = await sb.rpc("run_recall_check");
+        if (error) throw new Error(error.message);
+        return data.batchId;
+      },
+
+      async recallCheckStatus(batchId) {
+        const { data, error } = await sb.rpc("recall_check_status", { p_batch: batchId });
+        if (error) throw new Error(error.message);
+        return data;
+      },
+
+      async dismissRecall(id, ingredient, dismissed = true) {
+        check(await sb.from("recall_alerts").update({ dismissed }).eq("id", id).eq("ingredient", ingredient));
+      },
+
       /** Calls `onChange()` whenever any of this owner's rows change on any device. */
       subscribe(onChange) {
         if (channel) sb.removeChannel(channel);
@@ -265,5 +310,5 @@
     };
   }
 
-  return { LOCAL_KEY, KINDS, toRow, fromRow, dbKey, isValidDb, isEmpty, readLocal, createLocalStore, createCloudStore };
+  return { LOCAL_KEY, KINDS, toRow, fromRow, fromRecallRow, fromRunRow, dbKey, isValidDb, isEmpty, readLocal, createLocalStore, createCloudStore };
 });
