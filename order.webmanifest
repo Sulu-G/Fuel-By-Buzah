@@ -1,0 +1,31 @@
+{
+  "id": "fuel-by-buzah-order",
+  "name": "Fuel by Buzah \u2014 Order meals",
+  "short_name": "Fuel Order",
+  "description": "Order your weekly meal prep: pick meals, see macros, choose delivery or pickup.",
+  "start_url": "order.html",
+  "scope": "./",
+  "background_color": "#121214",
+  "theme_color": "#121214",
+  "display": "standalone",
+  "icons": [
+    {
+      "src": "img/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "img/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "img/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

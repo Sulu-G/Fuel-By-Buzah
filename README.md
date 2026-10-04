@@ -51,7 +51,11 @@ Spreadsheets got messy fast, so I built a tool that follows this cycle directly.
 - **Easy quantities.** Customers tap + / −, type a number, or pick one from a quick menu (1–30).
 - **Customers see macros as they shop.** Totals and per-day averages are shown, and customers can enter daily goals to compare against. Those goals fill in their macro targets in the manager.
 - **Owner approval.** Online orders arrive as *pending*, with a live alert, a tab badge and a count in the browser tab. The owner confirms or declines each one, and only confirmed orders count toward prep, deliveries and revenue.
-- **Payments outside the app.** Customers pick Cash App, Zelle or cash, and the confirmation screen shows the owner's handle plus an order reference for the note. The manager has a Paid toggle on every order.
+- **Payments outside the app.** Customers pick Cash App, Zelle or cash. For Cash App, the confirmation screen has a *Pay $42.50 in Cash App* button that opens Cash App with the amount already filled in. For Zelle, there are one-tap copy buttons for the contact, the amount and the order code. The manager has a Paid toggle on every order.
+- **Deadline countdown.** A live timer shows how long until orders close (Thursday 11:59 PM Houston time), turns gold in the last 24 hours, and switches to the late-order window on its own when the deadline passes.
+- **Returning customers in one tap.** The page remembers the customer's details, delivery choice, payment method and macro goals on their own device, then offers *Same as last time* to refill last week's meals. Meals no longer on the menu are skipped, and the customer is told which ones. *Not you?* erases everything saved.
+- **Add to calendar.** After ordering, customers can save the delivery or pickup day as an `.ics` file or to Google Calendar.
+- **Installable app.** Both pages can be added to a phone's home screen with the lion icon (web app manifest + service worker). The ordering app reopens the customer's shop, and the pages still open offline. Chrome shows an *Install* button, and iPhone users get Add to Home Screen instructions.
 - **Returning customers are matched by phone number**, whatever the formatting. A public form can never overwrite a customer's saved details; it only fills in blanks.
 - **Phone alerts.** Every new online order pushes a notification to the owner's phone through the free [ntfy](https://ntfy.sh) app, e.g. *"New order: Keisha · 3 meals · $51.00 · delivery Sun, Oct 4"*. Tapping it opens the manager's Orders tab.
 - **Try it:** open `order.html?demo` for a demo that sends nothing.
@@ -182,6 +186,9 @@ js/logic.js           Pure business logic — used by the browser and by Node te
 js/seed.js            Demo data
 js/store.js           Storage layer: LocalStore (browser) + CloudStore (Supabase)
 js/route.js           Route optimizer: geocoding, OSRM matrix, exact + heuristic solver, Google Maps legs
+js/shoptools.js       Ordering page helpers: deadline countdown, Cash App links, calendar files, reorder
+sw.js                 Service worker: installable pages, offline fallback (network first)
+*.webmanifest         Home-screen app manifests (ordering page + manager)
 js/recalls.js         Recall helpers: plain-language health risks, FDA classes, grouping
 js/config.js          Supabase URL + publishable key
 js/app.js             Manager UI: rendering, events, login, live sync, order inbox

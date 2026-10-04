@@ -11,6 +11,7 @@
   "use strict";
 
   const L = window.FuelLogic;
+  const T = window.FuelShopTools;
   const $ = (sel, el = document) => el.querySelector(sel);
   const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ESC[c]);
@@ -24,6 +25,8 @@
   const params = new URLSearchParams(location.search);
   const slug = (params.get("shop") || "").trim().toLowerCase();
   const isDemo = params.has("demo");
+  const LAST_KEY = `fuel-by-buzah:last-order:${isDemo ? "demo" : slug}`;
+  const SHOP_KEY = "fuel-by-buzah:last-shop"; // so the home-screen app reopens the right shop
 
   const state = {
     shop: null,
@@ -32,7 +35,9 @@
     payment: "",
     goals: {},
     submitting: false,
+    restored: false, // returning customer's preferences applied once
   };
+  let installPrompt = null; // Android/desktop Chrome "Install app" event
   let sb = null;
 
   // ---------- Helpers ----------
@@ -42,6 +47,12 @@
   }
   function saveContact(c) {
     try { localStorage.setItem(CONTACT_KEY, JSON.stringify(c)); } catch (_) { /* private mode */ }
+  }
+  function readJSON(key) {
+    try { return JSON.parse(localStorage.getItem(key) || "null"); } catch (_) { return null; }
+  }
+  function writeJSON(key, v) {
+    try { v == null ? localStorage.removeItem(key) : localStorage.setItem(key, JSON.stringify(v)); } catch (_) { /* private mode */ }
   }
 
   let toastTimer;
@@ -89,7 +100,72 @@
       late: `Late order: a ${money(w.lateFee)} fee applies. Ready <strong>${longDate(delivery)}</strong>.`,
       closed: `This week's orders are closed. Your order will be for <strong>${longDate(delivery)}</strong>.`,
     }[w.status];
-    return `<div class="banner ${w.status}"><span class="dot"></span><span>${msg}</span></div>`;
+    return `<div class="banner ${w.status}"><span class="dot"></span><span>${msg}</span></div>${countdownHtml()}`;
+  }
+
+  /** "Orders close in 1 day 6 hrs · Thu 11:59 PM" — refreshed every 30 seconds. */
+  function countdownHtml() {
+    const w = windowInfo();
+    const dl = T.orderDeadline(w, L.weekSchedule(w.weekOf));
+    const left = dl.ms - Date.now();
+    if (left <= 0) return "";
+    const label = dl.kind === "late" ? "Late orders close in" : w.status === "closed" ? "Next week's orders close in" : "Orders close in";
+    return `<div class="countdown${left < 24 * 3600e3 ? " urgent" : ""}" id="countdown" role="timer" aria-live="off">
+      <span class="cd-label">${label}</span> <strong class="cd-time">${esc(T.formatCountdown(left))}</strong>
+      <span class="cd-when">${esc(shortDay(dl.dateStr))}, 11:59 PM</span></div>`;
+  }
+
+  let countdownTimer = null;
+  function startCountdown() {
+    clearInterval(countdownTimer);
+    countdownTimer = setInterval(() => {
+      const box = $("#window-banner");
+      if (!box || !state.shop) return clearInterval(countdownTimer);
+      const w = windowInfo();
+      const dl = T.orderDeadline(w, L.weekSchedule(w.weekOf));
+      if (Date.now() >= dl.ms) {
+        // The deadline passed while the page was open: move to the next window (late fee or next week).
+        state.shop = { ...state.shop, today: T.todayInZone() };
+        box.innerHTML = windowBanner();
+        updateSummary();
+        return;
+      }
+      const t = $("#countdown .cd-time");
+      if (t) t.textContent = T.formatCountdown(dl.ms - Date.now());
+      const c = $("#countdown");
+      if (c) c.classList.toggle("urgent", dl.ms - Date.now() < 24 * 3600e3);
+    }, 30000);
+  }
+
+  /** Returning customers: greet them and offer last week's order in one tap. */
+  function welcomeHtml(c) {
+    const last = readJSON(LAST_KEY);
+    if (!c.name && !last) return "";
+    const first = String(c.name || "").split(" ")[0];
+    const re = last ? T.reorderCart(last, state.shop.menu) : null;
+    const canReorder = re && re.meals > 0 && !cartItems().length;
+    let reorderLine = "";
+    if (canReorder) {
+      const t = L.orderTotals({ items: Object.entries(re.cart).map(([mealId, qty]) => ({ mealId, qty })), fulfillment: last.fulfillment || state.fulfillment, lateFee: windowInfo().lateFee }, menuById(), state.shop.settings);
+      reorderLine = `<button class="btn btn-sm" type="button" data-reorder>Same as last time · ${re.meals} meal${re.meals === 1 ? "" : "s"} · ${money(t.total)}</button>`;
+    }
+    return `<section class="card welcome" id="welcome">
+      <div><strong>Welcome back${first ? `, ${esc(first)}` : ""}!</strong>
+        <span class="muted small">${last && last.placedAt ? `Your last order was ${esc(shortDay(last.placedAt))}.` : "Your details are filled in below."}</span></div>
+      <div class="btn-row">${reorderLine}<button class="btn btn-ghost btn-sm" type="button" data-forget>Not you?</button></div>
+    </section>`;
+  }
+
+  function applyReorder() {
+    const last = readJSON(LAST_KEY);
+    if (!last) return;
+    const re = T.reorderCart(last, state.shop.menu);
+    state.cart = re.cart;
+    if (last.fulfillment) state.fulfillment = last.fulfillment;
+    renderShop();
+    toast(re.missing.length ? `Added last order. Not on the menu this week: ${re.missing.join(", ")}.` : "Added your last order. Review and place it below.");
+    const ck = $("#checkout");
+    if (ck) ck.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   // ---------- Views ----------
@@ -115,6 +191,15 @@
     }
 
     const c = readContact();
+    if (!state.restored) {
+      state.restored = true;
+      const last = readJSON(LAST_KEY);
+      if (last) {
+        if (last.fulfillment === "pickup" || last.fulfillment === "delivery") state.fulfillment = last.fulfillment;
+        if (last.payment) state.payment = last.payment;
+        if (last.goals && !Object.keys(state.goals).length) state.goals = { ...last.goals };
+      }
+    }
     const pays = paymentOptions();
     if (!pays.some((p) => p.key === state.payment)) state.payment = pays.length === 1 ? pays[0].key : "";
 
@@ -130,6 +215,7 @@
         </div>
         <div id="window-banner">${windowBanner()}</div>
       </section>
+      ${welcomeHtml(c)}
 
       <div class="shop-layout">
         <div>
@@ -193,6 +279,7 @@
         </aside>
       </div>`;
     updateSummary();
+    startCountdown();
   }
 
   const QUICK_QTYS = [1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 15, 20, 21, 25, 30];
@@ -332,11 +419,14 @@
 
   function renderConfirmation(r, contact) {
     const pay = r.paymentMethod;
+    const amount = Number(r.total).toFixed(2);
+    const cashUrl = T.cashAppPayUrl(r.cashApp, r.total);
     const payBox = {
       cashapp: `<div class="pay-box">After we confirm, send <strong>${money(r.total)}</strong> on Cash App to<div class="handle">${esc(r.cashApp)}</div>Put <span class="ref">${esc(r.ref)}</span> in the note.
-        <div class="btn-row" style="margin-top:8px"><a class="btn btn-sm" href="https://cash.app/${encodeURIComponent(r.cashApp)}" target="_blank" rel="noopener">Open Cash App</a><button class="btn btn-ghost btn-sm" data-copy="${esc(r.cashApp)}">Copy cashtag</button></div></div>`,
+        <div class="btn-row" style="margin-top:8px">${cashUrl ? `<a class="btn btn-sm" href="${esc(cashUrl)}" target="_blank" rel="noopener" data-pay-link>Pay ${money(r.total)} in Cash App</a>` : ""}<button class="btn btn-ghost btn-sm" data-copy="${esc(r.ref)}" data-copy-label="Order code copied. Paste it in the note.">Copy order code</button></div>
+        <p class="small muted" style="margin:8px 0 0">The amount is filled in for you. Double-check it before you send.</p></div>`,
       zelle: `<div class="pay-box">After we confirm, send <strong>${money(r.total)}</strong> with Zelle to<div class="handle">${esc(r.zelle)}</div>Put <span class="ref">${esc(r.ref)}</span> in the memo.
-        <div class="btn-row" style="margin-top:8px"><button class="btn btn-ghost btn-sm" data-copy="${esc(r.zelle)}">Copy</button></div></div>`,
+        <div class="btn-row" style="margin-top:8px"><button class="btn btn-sm" data-copy="${esc(r.zelle)}" data-copy-label="Zelle contact copied.">Copy Zelle contact</button><button class="btn btn-ghost btn-sm" data-copy="${esc(amount)}" data-copy-label="Amount copied.">Copy amount</button><button class="btn btn-ghost btn-sm" data-copy="${esc(r.ref)}" data-copy-label="Order code copied.">Copy order code</button></div></div>`,
       cash: `<div class="pay-box">Pay <strong>${money(r.total)}</strong> in cash at ${contact.fulfillment === "pickup" ? "pickup" : "delivery"}.</div>`,
     }[pay] || "";
     $("#cart-bar").hidden = true;
@@ -356,10 +446,61 @@
         </div>
         ${r.window === "late" ? `<p class="small muted">Includes a ${money(r.lateFee)} late order fee.</p>` : ""}
         ${payBox}
+        ${calendarHtml(r, contact)}
+        ${installHtml()}
         ${isDemo ? `<p class="small muted">Demo mode: nothing was sent. In the live app this order appears in the manager's "New online orders" inbox.</p>` : ""}
         <button class="btn btn-ghost" data-restart>Start a new order</button>
       </section>`;
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  /** Save the delivery/pickup day to the customer's calendar. */
+  let lastEvent = null;
+  function calendarHtml(r, contact) {
+    if (!r.deliveryDay || !r.mealCount) return "";
+    const pickup = contact.fulfillment === "pickup";
+    lastEvent = {
+      uid: `order-${r.ref}`,
+      date: r.deliveryDay,
+      title: `${r.businessName || "Meal prep"} ${pickup ? "pickup" : "delivery"} (${r.mealCount} meals)`,
+      description: `Order #${r.ref} · ${r.mealCount} meals · ${money(r.total)}${pickup ? "" : "\nDelivered to: " + contact.address}`,
+      location: pickup ? "" : contact.address,
+    };
+    return `<div class="cal-box">
+      <span class="small muted">${pickup ? "Pickup" : "Delivery"} day: <strong>${esc(longDate(r.deliveryDay))}</strong></span>
+      <div class="btn-row"><button class="btn btn-ghost btn-sm" type="button" data-ics>Add to calendar</button>
+        <a class="btn btn-ghost btn-sm" href="${esc(T.googleCalendarUrl(lastEvent))}" target="_blank" rel="noopener">Google Calendar</a></div>
+    </div>`;
+  }
+
+  function downloadIcs() {
+    if (!lastEvent) return;
+    const blob = new Blob([T.buildIcs(lastEvent)], { type: "text/calendar;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${lastEvent.uid}.ics`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    toast("Calendar file saved. Open it to add the event.");
+  }
+
+  // ---------- Install as an app ----------
+  const isStandalone = () => (window.matchMedia && matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
+  const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+  function installHtml() {
+    if (isDemo || isStandalone()) return "";
+    if (installPrompt) {
+      return `<div class="install-box"><img src="img/icon-192.png" alt="" width="40" height="40" />
+        <div><strong>Order faster next time</strong><span class="small muted">Add ${esc(state.shop.businessName)} to your home screen.</span></div>
+        <button class="btn btn-sm" type="button" data-install>Install</button></div>`;
+    }
+    if (isIOS()) {
+      return `<div class="install-box"><img src="img/icon-192.png" alt="" width="40" height="40" />
+        <div><strong>Order faster next time</strong><span class="small muted">Tap the Share button <span aria-hidden="true">⎋</span>, then <strong>Add to Home Screen</strong>.</span></div></div>`;
+    }
+    return "";
   }
 
   // ---------- Submit ----------
@@ -420,6 +561,11 @@
         result = data;
       }
       saveContact({ name: contact.name, phone: contact.phone, address: contact.address || readContact().address || "" });
+      const names = menuById();
+      writeJSON(LAST_KEY, {
+        items: items.map((it) => ({ ...it, name: (names.get(it.mealId) || {}).name || "" })),
+        fulfillment: state.fulfillment, payment: state.payment, goals: state.goals, placedAt: T.todayInZone(), ref: result.ref,
+      });
       state.cart = {};
       renderConfirmation(result, contact);
     } catch (err) {
@@ -445,14 +591,32 @@
       return setQty(id, Number(pick.dataset.pick), true);
     }
     if (!e.target.closest("#qty-pop")) closeQtyMenu();
-    const t = e.target.closest("[data-add],[data-inc],[data-dec],[data-copy],[data-restart]");
+    const t = e.target.closest("[data-add],[data-inc],[data-dec],[data-copy],[data-restart],[data-reorder],[data-forget],[data-ics],[data-install]");
     if (!t) return;
+    if (t.hasAttribute("data-reorder")) return applyReorder();
+    if (t.hasAttribute("data-ics")) return downloadIcs();
+    if (t.hasAttribute("data-install")) {
+      if (!installPrompt) return;
+      installPrompt.prompt();
+      installPrompt.userChoice.finally(() => { installPrompt = null; const box = t.closest(".install-box"); if (box) box.remove(); });
+      return;
+    }
+    if (t.hasAttribute("data-forget")) {
+      saveContact({});
+      writeJSON(LAST_KEY, null);
+      writeJSON(SHOP_KEY, null);
+      state.goals = {};
+      state.payment = "";
+      renderShop();
+      return toast("Your saved details were removed from this device.");
+    }
     if (t.dataset.add) setQty(t.dataset.add, 1);
     else if (t.dataset.inc) setQty(t.dataset.inc, (state.cart[t.dataset.inc] || 0) + 1);
     else if (t.dataset.dec) setQty(t.dataset.dec, (state.cart[t.dataset.dec] || 0) - 1);
     else if (t.dataset.copy) {
       const v = t.dataset.copy;
-      (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject()).then(() => toast("Copied."), () => toast(v));
+      const msg = t.dataset.copyLabel || "Copied.";
+      (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject()).then(() => toast(msg), () => toast(v));
     } else if (t.hasAttribute("data-restart")) {
       renderShop();
       window.scrollTo({ top: 0 });
@@ -522,6 +686,8 @@
       return renderShop();
     }
     if (!slug) {
+      const saved = readJSON(SHOP_KEY);
+      if (saved && /^[a-z0-9-]{3,40}$/.test(saved)) return location.replace(`order.html?shop=${encodeURIComponent(saved)}`);
       return renderMessage("Ordering link needed", "This page needs a shop link, like <code>order.html?shop=your-shop</code>.", `<a class="btn btn-ghost" href="order.html?demo">See a demo</a>`);
     }
     const cfg = window.FUEL_CONFIG || {};
@@ -539,7 +705,16 @@
       return renderMessage("Shop not found", "This ordering link doesn't match any shop. Please check the link you were sent.");
     }
     state.shop = data;
+    writeJSON(SHOP_KEY, slug);
     renderShop();
+  }
+
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    installPrompt = e;
+  });
+  if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
+    window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
   }
 
   boot();
