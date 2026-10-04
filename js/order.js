@@ -36,7 +36,12 @@
     goals: {},
     submitting: false,
     restored: false, // returning customer's preferences applied once
+    avoid: new Set(), // allergen filter
+    repeat: false, // "Repeat every week"
   };
+  const PREFS_KEY = "fuel-by-buzah:prefs";
+  const DEMO_PLAN_KEY = "fuel-by-buzah:demo-plan";
+  const trackRef = params.has("track") ? (params.get("track") || "").trim().toUpperCase() : null;
   let installPrompt = null; // Android/desktop Chrome "Install app" event
   let sb = null;
 
@@ -65,6 +70,14 @@
   }
 
   const menuById = () => L.indexById(state.shop.menu);
+  const safePhoto = (url) => (/^(https:\/\/|data:image\/(jpeg|webp|png);base64,)/.test(String(url || "")) ? url : "");
+  /** Most a customer can add of a meal: 50, or what's left this week. */
+  function maxFor(id) {
+    const m = state.shop.menu.find((x) => x.id === id);
+    const left = m && m.remaining != null ? Math.max(0, Number(m.remaining)) : MAX_QTY;
+    return Math.min(MAX_QTY, left);
+  }
+  const shopLink = (extra = "") => `order.html?${isDemo ? "demo" : `shop=${encodeURIComponent(slug)}`}${extra}`;
   const cartItems = () => Object.entries(state.cart).filter(([, q]) => q > 0).map(([mealId, qty]) => ({ mealId, qty }));
   const windowInfo = () => L.orderWindow(state.shop.today, state.shop.settings);
 
@@ -152,7 +165,7 @@
     return `<section class="card welcome" id="welcome">
       <div><strong>Welcome back${first ? `, ${esc(first)}` : ""}!</strong>
         <span class="muted small">${last && last.placedAt ? `Your last order was ${esc(shortDay(last.placedAt))}.` : "Your details are filled in below."}</span></div>
-      <div class="btn-row">${reorderLine}<button class="btn btn-ghost btn-sm" type="button" data-forget>Not you?</button></div>
+      <div class="btn-row">${reorderLine}${last && last.ref ? `<a class="btn btn-ghost btn-sm" href="${esc(shopLink(`&track=${encodeURIComponent(last.ref)}`))}">Track #${esc(last.ref)}${last.plan ? " · plan" : ""}</a>` : ""}<button class="btn btn-ghost btn-sm" type="button" data-forget>Not you?</button></div>
     </section>`;
   }
 
@@ -178,6 +191,8 @@
     const shop = state.shop;
     const s = shop.settings;
     document.title = `Order · ${shop.businessName}`;
+    const tl = $("#track-link");
+    if (tl) { tl.href = shopLink("&track"); tl.hidden = false; }
     $("#shop-name").textContent = shop.businessName;
     $("#shop-tagline").textContent = shop.tagline || "Order online";
 
@@ -193,6 +208,8 @@
     const c = readContact();
     if (!state.restored) {
       state.restored = true;
+      const prefs = readJSON(PREFS_KEY);
+      if (prefs && Array.isArray(prefs.avoid)) state.avoid = new Set(prefs.avoid.filter((k) => L.ALLERGEN_LABELS[k]));
       const last = readJSON(LAST_KEY);
       if (last) {
         if (last.fulfillment === "pickup" || last.fulfillment === "delivery") state.fulfillment = last.fulfillment;
@@ -219,14 +236,11 @@
 
       <div class="shop-layout">
         <div>
-          <div class="menu-grid">
-            ${shop.menu.map((m) => `
-              <article class="card menu-card" data-meal="${esc(m.id)}">
-                <div class="top"><h3>${esc(m.name)}</h3><span class="price">${money(m.price)}</span></div>
-                ${macroChips(m.macros || {})}
-                <div class="stepper" data-stepper="${esc(m.id)}">${stepperHtml(m.id)}</div>
-              </article>`).join("")}
+          ${allergenFilterHtml()}
+          <div class="menu-grid" id="menu-grid">
+            ${shop.menu.map((m) => menuCardHtml(m)).join("")}
           </div>
+          <p class="small muted allergen-note">Allergen info comes from the kitchen. All meals are made in a shared kitchen, so traces are possible. If you have a severe allergy, mention it in the notes.</p>
 
           <h2 class="section-title" id="checkout">Your details</h2>
           <section class="card">
@@ -255,6 +269,11 @@
                 <label for="c-notes">Notes (optional)</label>
                 <input type="text" id="c-notes" name="notes" maxlength="500" placeholder="Allergies, gate code, swaps…" />
               </div>
+              ${s.plansEnabled !== false ? `<label class="repeat-box">
+                <input type="checkbox" id="c-repeat" ${state.repeat ? "checked" : ""} />
+                <span><strong>Repeat this order every week</strong>
+                  <span class="small muted">Each Monday we'll set up next week's order with the same meals, and ${esc(shop.businessName)} confirms it like any order. You pay week by week. Pause, skip a week or cancel anytime from <em>Track my order</em>.</span></span>
+              </label>` : ""}
               <div class="hp" aria-hidden="true"><label>Leave this empty<input type="text" name="website" tabindex="-1" autocomplete="off" /></label></div>
               <button class="btn submit-btn" type="submit" id="submit-btn">Place order</button>
               <p class="small muted" style="margin:10px 0 0">We'll text you to confirm. You pay after your order is confirmed.</p>
@@ -282,12 +301,55 @@
     startCountdown();
   }
 
+  function menuCardHtml(m) {
+    const photo = safePhoto(m.photo);
+    const allergens = (m.allergens || []).filter((k) => L.ALLERGEN_LABELS[k]);
+    const hidden = allergens.some((k) => state.avoid.has(k));
+    const left = m.remaining == null ? null : Math.max(0, Number(m.remaining));
+    const stock = left === 0 ? `<span class="stock out">Sold out this week</span>` : left != null && left <= 5 ? `<span class="stock low">Only ${left} left</span>` : "";
+    return `
+      <article class="card menu-card${photo ? " has-photo" : ""}${state.cart[m.id] ? " in-cart" : ""}${left === 0 ? " is-sold-out" : ""}" data-meal="${esc(m.id)}" ${hidden ? "hidden" : ""}>
+        ${photo ? `<img class="menu-photo" src="${esc(photo)}" alt="${esc(m.name)}" loading="lazy" />` : ""}
+        <div class="top"><h3>${esc(m.name)}</h3><span class="price">${money(m.price)}</span></div>
+        ${m.description ? `<p class="menu-desc">${esc(m.description)}</p>` : ""}
+        ${macroChips(m.macros || {})}
+        ${allergens.length ? `<div class="contains"><span>Contains:</span> ${allergens.map((k) => `<span class="allergen-chip">${esc(L.ALLERGEN_LABELS[k])}</span>`).join("")}</div>` : ""}
+        ${(m.ingredients || []).length ? `<details class="whats-in"><summary>What's in it</summary><p>${esc(m.ingredients.join(", "))}</p></details>` : ""}
+        ${stock}
+        <div class="stepper" data-stepper="${esc(m.id)}">${stepperHtml(m.id)}</div>
+      </article>`;
+  }
+
+  function allergenFilterHtml() {
+    const present = L.ALLERGENS.filter(([k]) => state.shop.menu.some((m) => (m.allergens || []).includes(k)));
+    if (!present.length) return "";
+    const hiddenCount = state.shop.menu.filter((m) => (m.allergens || []).some((k) => state.avoid.has(k))).length;
+    return `<div class="allergen-filter" id="allergen-filter">
+      <span class="small muted">Hide meals with:</span>
+      ${present.map(([k, lbl]) => `<button type="button" class="chip-toggle" data-avoid="${k}" aria-pressed="${state.avoid.has(k)}">${esc(lbl)}</button>`).join("")}
+      ${hiddenCount ? `<span class="small muted" id="hidden-note">${hiddenCount} meal${hiddenCount === 1 ? "" : "s"} hidden</span>` : ""}
+    </div>`;
+  }
+
+  function toggleAvoid(k) {
+    if (state.avoid.has(k)) state.avoid.delete(k); else state.avoid.add(k);
+    writeJSON(PREFS_KEY, { avoid: [...state.avoid] });
+    const f = $("#allergen-filter");
+    if (f) f.outerHTML = allergenFilterHtml();
+    for (const m of state.shop.menu) {
+      const card = document.querySelector(`[data-meal="${CSS.escape(m.id)}"]`);
+      if (card) card.hidden = (m.allergens || []).some((a) => state.avoid.has(a));
+    }
+  }
+
   const QUICK_QTYS = [1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 15, 20, 21, 25, 30];
 
   /** Quantity control: tap +/−, type a number, or pick one from the ▾ menu. */
   function stepperHtml(id) {
     const q = state.cart[id] || 0;
     const name = (state.shop.menu.find((m) => m.id === id) || {}).name || "meal";
+    const max = maxFor(id);
+    if (!q && max === 0) return `<button type="button" class="add add-label sold-out" disabled>Sold out</button>`;
     const menuBtn = `<button type="button" class="qty-menu-btn" data-qtymenu="${esc(id)}" aria-haspopup="listbox" aria-label="Choose how many ${esc(name)}">▾</button>`;
     if (!q) return `<button type="button" class="add add-label" data-add="${esc(id)}" aria-label="Add ${esc(name)}">Add</button>${menuBtn}`;
     return `
@@ -296,7 +358,7 @@
         <input class="qty-input" type="text" inputmode="numeric" pattern="[0-9]*" data-qty="${esc(id)}" value="${q}" aria-label="How many ${esc(name)}" />
         ${menuBtn}
       </span>
-      <button type="button" class="add" data-inc="${esc(id)}" aria-label="Add one" ${q >= MAX_QTY ? "disabled" : ""}>+</button>`;
+      <button type="button" class="add" data-inc="${esc(id)}" aria-label="Add one" ${q >= max ? "disabled" : ""}>+</button>`;
   }
 
   function closeQtyMenu() {
@@ -315,7 +377,7 @@
     pop.className = "qty-pop";
     pop.dataset.for = id;
     pop.setAttribute("role", "listbox");
-    pop.innerHTML = `${cur ? `<button type="button" role="option" data-pick="0" class="remove">Remove</button>` : ""}${QUICK_QTYS.map((n) => `<button type="button" role="option" data-pick="${n}" aria-selected="${n === cur}" class="${n === cur ? "current" : ""}">${n}</button>`).join("")}`;
+    pop.innerHTML = `${cur ? `<button type="button" role="option" data-pick="0" class="remove">Remove</button>` : ""}${QUICK_QTYS.filter((n) => n <= maxFor(id)).map((n) => `<button type="button" role="option" data-pick="${n}" aria-selected="${n === cur}" class="${n === cur ? "current" : ""}">${n}</button>`).join("")}`;
     document.body.appendChild(pop);
     const r = btn.getBoundingClientRect();
     const w = pop.offsetWidth;
@@ -333,14 +395,15 @@
     const digits = input.value.replace(/\D/g, "").slice(0, 2);
     if (digits !== input.value) input.value = digits;
     if (digits === "" && !commit) return; // let them clear the box and type a new number
-    const q = Math.min(MAX_QTY, Number(digits || 0));
+    const q = Math.min(maxFor(id), Number(digits || 0));
+    if (commit && Number(digits || 0) > q) toast(`Only ${q} left this week.`);
     // Only rebuild the control when it must switch back to "Add"; rebuilding while the
     // shopper is clicking + / − / ▾ would swallow that click.
     if (commit && q === 0) return setQty(id, 0, true);
     if (commit) {
       input.value = String(q);
       const inc = input.closest(".stepper").querySelector("[data-inc]");
-      if (inc) inc.disabled = q >= MAX_QTY;
+      if (inc) inc.disabled = q >= maxFor(id);
     }
     state.cart[id] = q;
     const card = input.closest(".menu-card");
@@ -397,7 +460,9 @@
   }
 
   function setQty(id, q, keepFocus) {
-    state.cart[id] = Math.max(0, Math.min(MAX_QTY, q));
+    const max = maxFor(id);
+    if (q > max) toast(max ? `Only ${max} left this week.` : "Sold out for this week.");
+    state.cart[id] = Math.max(0, Math.min(max, q));
     const card = document.querySelector(`[data-meal="${CSS.escape(id)}"]`);
     if (card) {
       const box = card.querySelector("[data-stepper]");
@@ -446,7 +511,9 @@
         </div>
         ${r.window === "late" ? `<p class="small muted">Includes a ${money(r.lateFee)} late order fee.</p>` : ""}
         ${payBox}
+        ${r.planId ? `<div class="plan-note"><strong>Weekly plan is on.</strong> Next week's order will be set up Monday morning with the same meals for ${esc(r.businessName)} to confirm. You can pause, skip a week or cancel anytime.</div>` : ""}
         ${calendarHtml(r, contact)}
+        <a class="btn btn-ghost btn-sm" href="${esc(shopLink(`&track=${encodeURIComponent(r.ref)}`))}" data-track-link>Track this order${r.planId ? " / manage plan" : ""}</a>
         ${installHtml()}
         ${isDemo ? `<p class="small muted">Demo mode: nothing was sent. In the live app this order appears in the manager's "New online orders" inbox.</p>` : ""}
         <button class="btn btn-ghost" data-restart>Start a new order</button>
@@ -503,6 +570,177 @@
     return "";
   }
 
+  // ---------- Track my order ----------
+
+  const STATUS_TEXT = {
+    pending: { label: "Waiting for confirmation", tone: "late", note: "We've got your order. You'll get a text when it's confirmed." },
+    confirmed: { label: "Confirmed", tone: "open", note: "Your order is on the prep list." },
+    declined: { label: "Not accepted", tone: "closed", note: "This order couldn't be accepted. Please reach out if you have questions." },
+  };
+
+  function renderTrack(result, error) {
+    const c = readContact();
+    const last = readJSON(LAST_KEY) || {};
+    document.title = `Track your order · ${state.shop.businessName}`;
+    $("#shop-name").textContent = state.shop.businessName;
+    $("#cart-bar").hidden = true;
+    const code = result ? result.ref : trackRef || last.ref || "";
+    $("#shop").innerHTML = `
+      <section class="card track-card">
+        <div class="card-head"><h1 style="margin:0">Track your order</h1><a class="btn btn-ghost btn-sm" href="${esc(shopLink())}">Back to menu</a></div>
+        <form id="track-form" class="track-form" novalidate>
+          <div class="row">
+            <div class="field"><label for="t-phone">Phone number you ordered with</label><input type="tel" id="t-phone" name="phone" autocomplete="tel" inputmode="tel" value="${esc(c.phone || "")}" required /></div>
+            <div class="field"><label for="t-code">Order code</label><input type="text" id="t-code" name="code" maxlength="6" autocapitalize="characters" autocomplete="off" value="${esc(code)}" placeholder="e.g. 4F7K2Q" required /></div>
+          </div>
+          ${error ? `<div class="errors" role="alert">${esc(error)}</div>` : ""}
+          <button class="btn" type="submit" id="track-btn">Check order</button>
+          <p class="small muted" style="margin:8px 0 0">The 6-character code is on your confirmation screen.</p>
+        </form>
+        <div id="track-result">${result ? trackResultHtml(result) : ""}</div>
+      </section>`;
+    // Coming from a link with the code and a remembered phone: look it up right away.
+    if (!result && !error && code && c.phone && !renderTrack.autoTried) {
+      renderTrack.autoTried = true;
+      lookupOrder($("#track-form"));
+    }
+  }
+
+  function trackPayHtml(r) {
+    if (r.paid) return `<div class="pay-box paid-box">Paid. Thank you!</div>`;
+    if (r.status === "declined") return "";
+    const when = r.status === "pending" ? "After we confirm, send" : "Please send";
+    if (r.paymentMethod === "cashapp" && r.cashApp) {
+      const url = T.cashAppPayUrl(r.cashApp, r.total);
+      return `<div class="pay-box">${when} <strong>${money(r.total)}</strong> on Cash App to <strong>${esc(r.cashApp)}</strong> with <span class="ref">${esc(r.ref)}</span> in the note.
+        ${url ? `<div class="btn-row" style="margin-top:8px"><a class="btn btn-sm" href="${esc(url)}" target="_blank" rel="noopener">Pay ${money(r.total)} in Cash App</a></div>` : ""}</div>`;
+    }
+    if (r.paymentMethod === "zelle" && r.zelle) {
+      return `<div class="pay-box">${when} <strong>${money(r.total)}</strong> with Zelle to <strong>${esc(r.zelle)}</strong> with <span class="ref">${esc(r.ref)}</span> in the memo.
+        <div class="btn-row" style="margin-top:8px"><button class="btn btn-ghost btn-sm" data-copy="${esc(r.zelle)}" data-copy-label="Zelle contact copied.">Copy Zelle contact</button><button class="btn btn-ghost btn-sm" data-copy="${esc(Number(r.total).toFixed(2))}" data-copy-label="Amount copied.">Copy amount</button></div></div>`;
+    }
+    if (r.paymentMethod === "cash") return `<div class="pay-box">Pay <strong>${money(r.total)}</strong> in cash at ${r.fulfillment === "pickup" ? "pickup" : "delivery"}.</div>`;
+    return "";
+  }
+
+  function planHtml(p) {
+    if (!p) return "";
+    const label = { active: "Active", paused: "Paused", cancelled: "Cancelled" }[p.status] || p.status;
+    const skips = (p.skipWeeks || []).map(String);
+    const confirmCancel = state.confirmCancel;
+    return `
+      <section class="plan-box" id="plan-box">
+        <div class="card-head"><h2 style="margin:0">Your weekly plan</h2><span class="badge plan-${esc(p.status)}">${esc(label)}</span></div>
+        <ul class="track-items">${(p.items || []).map((i) => `<li><strong>${i.qty}×</strong> ${esc(i.name)}${i.available === false ? ' <span class="small muted">(not on the menu right now; it will be left out)</span>' : ""}</li>`).join("")}</ul>
+        ${p.status === "active" && p.nextWeek ? `<p class="small">Next order: set up <strong>${esc(shortDay(p.nextWeek))}</strong> for ${p.fulfillment === "pickup" ? "pickup" : "delivery"} <strong>${esc(longDate(L.addDays(String(p.nextWeek), 6)))}</strong>.</p>` : ""}
+        ${p.status === "paused" ? `<p class="small muted">Paused. No orders will be set up until you resume.</p>` : ""}
+        ${skips.length ? `<div class="small skip-list">Skipping: ${skips.map((w) => `<span class="skip-chip">week of ${esc(shortDay(w))} <button type="button" class="link-btn" data-plan-action="unskip" data-week="${esc(w)}">Undo</button></span>`).join(" ")}</div>` : ""}
+        ${p.status === "cancelled" ? `<p class="small muted">This plan is cancelled. To start a new one, place an order and tick "Repeat this order every week".</p>` : `
+        <div class="btn-row" style="margin-top:10px">
+          ${p.status === "active" ? `<button class="btn btn-ghost btn-sm" type="button" data-plan-action="skip">Skip next week</button><button class="btn btn-ghost btn-sm" type="button" data-plan-action="pause">Pause plan</button>` : `<button class="btn btn-sm" type="button" data-plan-action="resume">Resume plan</button>`}
+          <button class="btn btn-ghost btn-sm danger-text" type="button" data-plan-action="cancel">${confirmCancel ? "Tap again to cancel your plan" : "Cancel plan"}</button>
+        </div>`}
+      </section>`;
+  }
+
+  function trackResultHtml(r) {
+    const st = STATUS_TEXT[r.status] || STATUS_TEXT.pending;
+    return `
+      <div class="track-result">
+        <div class="banner ${st.tone}"><span class="dot"></span><span><strong>${esc(st.label)}</strong> · ${esc(st.note)}</span></div>
+        <div class="receipt-meta">
+          <div><span>Order</span><span class="ref">#${esc(r.ref)}</span></div>
+          <div><span>${r.fulfillment === "pickup" ? "Pickup" : "Delivery"}</span>${esc(longDate(r.deliveryDay))}</div>
+          <div><span>Meals</span>${r.mealCount}</div>
+          <div><span>Total</span><strong>${money(r.total)}</strong></div>
+        </div>
+        <ul class="track-items">${(r.items || []).map((i) => `<li><strong>${i.qty}×</strong> ${esc(i.name)}</li>`).join("")}</ul>
+        ${trackPayHtml(r)}
+        ${r.source === "plan" ? `<p class="small muted">This order was set up from your weekly plan.</p>` : ""}
+        ${planHtml(r.plan)}
+      </div>`;
+  }
+
+  let lastLookup = null; // { phone, code, result }
+  async function lookupOrder(form) {
+    const phone = String(form.phone.value || "").trim();
+    const code = String(form.code.value || "").trim().toUpperCase();
+    if (phone.replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "").length !== 10) return renderTrack(null, "Enter the 10-digit phone number you ordered with.");
+    if (!/^[A-Z0-9]{6}$/.test(code)) return renderTrack(null, "The order code is 6 letters and numbers, like 4F7K2Q.");
+    const btn = $("#track-btn");
+    if (btn) { btn.disabled = true; btn.textContent = "Checking…"; }
+    try {
+      const result = isDemo ? demoTrack(phone, code) : await rpc("track_order", { p_slug: slug, p_phone: phone, p_ref: code });
+      lastLookup = { phone, code, result };
+      state.confirmCancel = false;
+      renderTrack(result);
+      history.replaceState(null, "", shopLink(`&track=${encodeURIComponent(code)}`));
+    } catch (err) {
+      renderTrack(null, err.message || "Something went wrong. Please try again.");
+    }
+  }
+
+  async function planAction(action, week, btn) {
+    if (!lastLookup) return;
+    if (action === "cancel" && !state.confirmCancel) {
+      state.confirmCancel = true;
+      $("#plan-box").outerHTML = planHtml(lastLookup.result.plan);
+      return;
+    }
+    state.confirmCancel = false;
+    if (btn) btn.disabled = true;
+    try {
+      const plan = isDemo ? demoPlanAction(action, week)
+        : await rpc("plan_action", { p_slug: slug, p_phone: lastLookup.phone, p_ref: lastLookup.code, p_action: action, p_week: week });
+      lastLookup.result.plan = plan;
+      $("#plan-box").outerHTML = planHtml(plan);
+      toast({ skip: "Next week skipped.", unskip: "That week is back on.", pause: "Plan paused.", resume: "Plan resumed.", cancel: "Plan cancelled." }[action] || "Saved.");
+    } catch (err) {
+      toast(err.message || "Couldn't update your plan. Please try again.");
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function rpc(name, args) {
+    const { data, error } = await sb.rpc(name, args);
+    if (error) throw new Error(/fetch|network/i.test(error.message) ? "We couldn't reach the server. Check your connection and try again." : error.message);
+    return data;
+  }
+
+  // Demo mode: track the order placed in this browser; plan changes stay in this browser.
+  function demoTrack(phone, code) {
+    const last = readJSON(LAST_KEY);
+    const c = readContact();
+    const digits = (p) => String(p || "").replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
+    if (!last || last.ref !== code || digits(c.phone) !== digits(phone)) throw new Error("We couldn't find that order. Check the order code and the phone number you used.");
+    const names = menuById();
+    return {
+      ref: last.ref, status: "pending", paid: false, source: "online", fulfillment: last.fulfillment, deliveryDay: last.deliveryDay, weekOf: last.weekOf,
+      total: last.total, paymentMethod: last.payment, cashApp: state.shop.settings.cashApp, zelle: state.shop.settings.zelle,
+      items: last.items.map((i) => ({ name: i.name || (names.get(i.mealId) || {}).name || "Meal", qty: i.qty })),
+      mealCount: last.items.reduce((n, i) => n + i.qty, 0),
+      plan: demoPlanJson(),
+    };
+  }
+  function demoPlanJson() {
+    const p = readJSON(DEMO_PLAN_KEY);
+    if (!p) return null;
+    const pz = T.zonedParts(Date.now());
+    return { ...p, nextWeek: L.planNextWeek(p, T.todayInZone(), pz.h < 6) };
+  }
+  function demoPlanAction(action, week) {
+    const p = readJSON(DEMO_PLAN_KEY);
+    if (!p || p.status === "cancelled") throw new Error("This weekly plan was cancelled.");
+    const next = demoPlanJson().nextWeek;
+    if (action === "pause") p.status = "paused";
+    else if (action === "resume") p.status = "active";
+    else if (action === "cancel") p.status = "cancelled";
+    else if (action === "skip") { if (p.status !== "active") throw new Error("Resume the plan first."); p.skipWeeks = [...new Set([...(p.skipWeeks || []), next])].sort(); }
+    else if (action === "unskip") p.skipWeeks = (p.skipWeeks || []).filter((w) => w !== week);
+    writeJSON(DEMO_PLAN_KEY, p);
+    return demoPlanJson();
+  }
+
   // ---------- Submit ----------
 
   async function submit(form) {
@@ -538,6 +776,7 @@
       notes: String(fd.get("notes") || "").trim(),
       items,
       targets: Object.fromEntries(L.MACRO_KEYS.filter((k) => state.goals[k] > 0).map((k) => [k, state.goals[k]])),
+      repeatWeekly: !!state.repeat && state.shop.settings.plansEnabled !== false,
     };
 
     state.submitting = true;
@@ -551,9 +790,10 @@
         const w = windowInfo();
         await new Promise((r) => setTimeout(r, 400));
         result = {
-          ref: Math.random().toString(36).slice(2, 8).toUpperCase(), status: "pending", window: w.status, weekOf: w.weekOf,
+          ref: Math.random().toString(16).slice(2, 8).padEnd(6, "0").toUpperCase(), status: "pending", window: w.status, weekOf: w.weekOf,
           deliveryDay: L.weekSchedule(w.weekOf).deliveryDay, mealCount: t.mealCount, total: t.total, lateFee: t.lateFee,
           paymentMethod: state.payment, cashApp: state.shop.settings.cashApp, zelle: state.shop.settings.zelle, businessName: state.shop.businessName,
+          planId: payload.repeatWeekly ? "plan_demo" : null,
         };
       } else {
         const { data, error } = await sb.rpc("place_order", { p_slug: slug, p_order: payload });
@@ -565,7 +805,10 @@
       writeJSON(LAST_KEY, {
         items: items.map((it) => ({ ...it, name: (names.get(it.mealId) || {}).name || "" })),
         fulfillment: state.fulfillment, payment: state.payment, goals: state.goals, placedAt: T.todayInZone(), ref: result.ref,
+        total: result.total, deliveryDay: result.deliveryDay, weekOf: result.weekOf, plan: !!result.planId,
       });
+      if (isDemo) writeJSON(DEMO_PLAN_KEY, result.planId ? { status: "active", skipWeeks: [], lastWeek: result.weekOf, items: items.map((it) => ({ name: (names.get(it.mealId) || {}).name || "Meal", qty: it.qty, available: true })), fulfillment: state.fulfillment } : null);
+      state.repeat = false;
       state.cart = {};
       renderConfirmation(result, contact);
     } catch (err) {
@@ -591,9 +834,11 @@
       return setQty(id, Number(pick.dataset.pick), true);
     }
     if (!e.target.closest("#qty-pop")) closeQtyMenu();
-    const t = e.target.closest("[data-add],[data-inc],[data-dec],[data-copy],[data-restart],[data-reorder],[data-forget],[data-ics],[data-install]");
+    const t = e.target.closest("[data-add],[data-inc],[data-dec],[data-copy],[data-restart],[data-reorder],[data-forget],[data-ics],[data-install],[data-avoid],[data-plan-action]");
     if (!t) return;
     if (t.hasAttribute("data-reorder")) return applyReorder();
+    if (t.dataset.avoid) return toggleAvoid(t.dataset.avoid);
+    if (t.dataset.planAction) return planAction(t.dataset.planAction, t.dataset.week || null, t);
     if (t.hasAttribute("data-ics")) return downloadIcs();
     if (t.hasAttribute("data-install")) {
       if (!installPrompt) return;
@@ -632,6 +877,7 @@
       updateSummary();
     }
     if (e.target.name === "payment") state.payment = e.target.value;
+    if (e.target.id === "c-repeat") state.repeat = e.target.checked;
   });
 
   document.addEventListener("keydown", (e) => {
@@ -665,6 +911,7 @@
   });
 
   document.addEventListener("submit", (e) => {
+    if (e.target.id === "track-form") { e.preventDefault(); return lookupOrder(e.target); }
     if (e.target.id !== "checkout-form") return;
     e.preventDefault();
     submit(e.target);
@@ -681,9 +928,17 @@
         tagline: d.settings.tagline,
         today: L.toISODate(new Date()),
         settings: d.settings,
-        menu: d.menu.filter((m) => m.active !== false).map(({ id, name, price, macros }) => ({ id, name, price, macros })),
+        menu: (() => {
+          const w = L.orderWindow(L.toISODate(new Date()), d.settings).weekOf;
+          const sold = L.soldForWeek(d.orders.map((o) => ({ ...o, weekOf: w })), w);
+          return d.menu.filter((m) => m.active !== false).map((m) => ({
+            id: m.id, name: m.name, price: m.price, macros: m.macros, description: m.description, allergens: m.allergens, photo: m.photo,
+            ingredients: [...new Set(m.ingredients.map((i) => i.item.toLowerCase()))].sort(),
+            remaining: m.weeklyLimit ? Math.max(0, m.weeklyLimit - (sold.get(m.id) || 0)) : null,
+          }));
+        })(),
       };
-      return renderShop();
+      return trackRef !== null ? renderTrack() : renderShop();
     }
     if (!slug) {
       const saved = readJSON(SHOP_KEY);
@@ -706,6 +961,7 @@
     }
     state.shop = data;
     writeJSON(SHOP_KEY, slug);
+    if (trackRef !== null) return renderTrack();
     renderShop();
   }
 

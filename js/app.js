@@ -219,6 +219,160 @@
       ${orderBtn}`;
   }
 
+  // ---------- v6 helpers: photos, allergens, delivery area, weekly plans ----------
+  const allergenText = (keys) => (keys || []).map((k) => L.ALLERGEN_LABELS[k] || k).join(", ");
+  const safePhoto = (url) => (/^(https:\/\/|data:image\/(jpeg|webp|png);base64,)/.test(String(url || "")) ? url : "");
+
+  /** Shrink a photo in the browser before saving: max side in px, JPEG quality 0–1. */
+  async function resizeImage(file, maxSide, quality) {
+    if (!file || !/^image\//.test(file.type)) throw new Error("Choose an image file (JPG, PNG or WebP).");
+    if (file.size > 15 * 1024 * 1024) throw new Error("That photo is over 15 MB. Choose a smaller one.");
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise((resolve, reject) => {
+        const i = new Image();
+        i.onload = () => resolve(i);
+        i.onerror = () => reject(new Error("Couldn't read that image."));
+        i.src = url;
+      });
+      const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", quality));
+      return { blob, dataUrl: canvas.toDataURL("image/jpeg", quality) };
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  /** Miles from the kitchen for a delivery address, if we know both spots on the map. */
+  const distances = new Map(); // normalized address → miles | null (not found)
+  let distanceBusy = false;
+  function milesFor(address) {
+    const s = db.settings;
+    if (!s.kitchenGeo || !address) return undefined;
+    const key = FuelRoute.normalizeAddress(address);
+    if (distances.has(key)) return distances.get(key);
+    const c = db.customers.find((x) => x.geo && x.geo.q === key);
+    const cached = readJSON(GEO_CACHE_KEY, {})[key];
+    const geo = (c && c.geo) || cached;
+    if (geo) {
+      const mi = FuelRoute.haversineMeters(s.kitchenGeo, geo) / 1609.344;
+      distances.set(key, mi);
+      return mi;
+    }
+    return undefined;
+  }
+  /** Look up any pending delivery addresses we haven't placed on the map yet (politely, 1/sec). */
+  async function fillDistances() {
+    if (distanceBusy || !db || !db.settings.kitchenGeo) return;
+    const todo = [...new Set(db.orders.filter((o) => o.status === "pending" && o.fulfillment === "delivery")
+      .map((o) => (o.contact && o.contact.address) || (db.customers.find((c) => c.id === o.customerId) || {}).address || "")
+      .filter((a) => a && milesFor(a) === undefined))];
+    if (!todo.length) return;
+    distanceBusy = true;
+    const cache = readJSON(GEO_CACHE_KEY, {});
+    for (const addr of todo.slice(0, 10)) {
+      const key = FuelRoute.normalizeAddress(addr);
+      try {
+        const g = await geocodeThrottled(addr);
+        if (g) { cache[key] = { q: key, lat: g.lat, lng: g.lng }; writeJSON(GEO_CACHE_KEY, cache); }
+        else distances.set(key, null);
+      } catch (_) { distances.set(key, null); }
+    }
+    distanceBusy = false;
+    if (ui.tab === "orders") render();
+  }
+  function distanceBadge(address) {
+    const s = db.settings;
+    if (!s.kitchenGeo || !address) return "";
+    const mi = milesFor(address);
+    if (mi === undefined) return `<span class="badge">Checking distance…</span>`;
+    if (mi === null) return `<span class="badge late" title="This address couldn't be found on the map">Address not on map</span>`;
+    const radius = Number(s.deliveryRadiusMiles) || 0;
+    const out = radius > 0 && mi > radius;
+    return `<span class="badge ${out ? "out-area" : "in-area"}" title="Straight-line distance from your kitchen">${out ? "Outside area · " : ""}${mi.toFixed(1)} mi</span>`;
+  }
+
+  // Weekly plans: what's next for a plan (same rule as the database).
+  function planNext(plan) {
+    const p = FuelShopTools.zonedParts(Date.now());
+    const todayStr = FuelShopTools.todayInZone();
+    return L.planNextWeek(plan, todayStr, p.h < 6);
+  }
+  const planItemsText = (plan) => {
+    const byId = L.indexById(db.menu);
+    return (plan.items || []).map((it) => {
+      const m = byId.get(it.mealId);
+      return `${it.qty}× ${m ? m.name : "Removed meal"}${m && m.active === false ? " (off menu)" : ""}`;
+    }).join(", ");
+  };
+
+  function plansCard() {
+    const plans = (db.plans || []).filter((p) => ui.showCancelledPlans || p.status !== "cancelled");
+    const active = (db.plans || []).filter((p) => p.status === "active").length;
+    const cancelled = (db.plans || []).filter((p) => p.status === "cancelled").length;
+    const byId = new Map(db.customers.map((c) => [c.id, c]));
+    if (!(db.plans || []).length) {
+      return `<section class="card plans-card" style="margin-bottom:16px"><div class="card-head"><h2>Weekly meal plans</h2><span class="badge">0 active</span></div>
+        <p class="muted small" style="margin:0">When a customer ticks <strong>Repeat every week</strong> at checkout, their plan shows up here. Each Monday at 6 AM, that week's order is created as <em>pending</em> for you to confirm.</p></section>`;
+    }
+    return `
+      <section class="card plans-card" style="margin-bottom:16px">
+        <div class="card-head"><h2>Weekly meal plans</h2><span class="badge pickup">${active} active</span></div>
+        <p class="muted small" style="margin-top:-4px">Each Monday at 6 AM, active plans create that week's order as pending in your Orders inbox. Customers can pause, skip a week or cancel from their order page.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Customer</th><th>Meals</th><th>Type</th><th>Status</th><th>Next order</th><th></th></tr></thead>
+          <tbody>${plans.map((p) => {
+            const c = byId.get(p.customerId);
+            const next = planNext(p);
+            const skips = (p.skipWeeks || []).filter((w) => w >= L.weekStart(today()));
+            return `<tr>
+              <td><strong>${esc((c && c.name) || (p.contact && p.contact.name) || "Unknown")}</strong><div class="muted small">${esc((c && c.phone) || (p.contact && p.contact.phone) || "")}</div></td>
+              <td class="small">${esc(planItemsText(p))}</td>
+              <td>${p.fulfillment === "pickup" ? '<span class="badge pickup">Pickup</span>' : '<span class="badge delivery">Delivery</span>'} <span class="small muted">${esc(PAYMENT_LABELS[p.paymentMethod] || "")}</span></td>
+              <td><span class="badge plan-${p.status}">${p.status === "active" ? "Active" : p.status === "paused" ? "Paused" : "Cancelled"}</span></td>
+              <td class="small">${next ? `Week of ${shortDate(next)}` : "—"}${skips.length ? `<div class="muted">Skipping ${skips.map(shortDate).join(", ")}</div>` : ""}</td>
+              <td class="actions">${p.status === "cancelled" ? "" : `
+                ${p.status === "active" ? `<button class="btn btn-ghost btn-sm" data-action="plan-pause" data-id="${p.id}">Pause</button>` : `<button class="btn btn-ghost btn-sm" data-action="plan-resume" data-id="${p.id}">Resume</button>`}
+                <button class="btn btn-danger btn-sm" data-action="plan-cancel" data-id="${p.id}">${ui.confirming === "plan-cancel:" + p.id ? "Click again to cancel" : "Cancel"}</button>`}</td>
+            </tr>`;
+          }).join("")}</tbody>
+        </table></div>
+        ${cancelled ? `<button class="btn btn-ghost btn-sm" data-action="plans-toggle-cancelled" style="margin-top:8px">${ui.showCancelledPlans ? "Hide" : "Show"} ${cancelled} cancelled</button>` : ""}
+      </section>`;
+  }
+
+  /** Settings: kitchen address + delivery radius (stays in your account; customers never see it). */
+  function deliveryAreaCard() {
+    const s = db.settings;
+    return `
+      <section class="card">
+        <div class="card-head"><h2>Delivery area</h2>${s.kitchenGeo && s.deliveryRadiusMiles ? `<span class="badge pickup">${esc(s.deliveryRadiusMiles)} mi</span>` : ""}</div>
+        <p class="muted small">New delivery orders show their distance from your kitchen, and orders outside your radius are flagged in the inbox so you can decide. Your kitchen address stays in your account. Customers never see it.</p>
+        <form data-form="delivery-area" novalidate>
+          ${errorBox("delivery-area")}
+          <div class="field"><label for="da-address">Kitchen address</label><input type="text" id="da-address" name="kitchenAddress" value="${esc(s.kitchenAddress || "")}" autocomplete="street-address" placeholder="Street, city, ZIP" /></div>
+          <div class="field"><label for="da-radius">Delivery radius (miles)</label><input type="number" id="da-radius" name="radius" min="1" max="100" step="0.5" inputmode="decimal" value="${esc(s.deliveryRadiusMiles || "")}" placeholder="e.g. 15" /></div>
+          ${s.kitchenGeo ? `<p class="small muted" style="margin-top:-4px">✓ Found on the map.</p>` : ""}
+          <button class="btn" type="submit">${ui.areaBusy ? "Finding address…" : "Save delivery area"}</button>
+        </form>
+      </section>`;
+  }
+
+  /** Settings: allow customers to start weekly plans. */
+  function plansSettingsCard() {
+    const on = db.settings.plansEnabled !== false;
+    return `
+      <section class="card">
+        <div class="card-head"><h2>Weekly meal plans</h2>${on ? '<span class="badge pickup">On</span>' : '<span class="badge">Off</span>'}</div>
+        <p class="muted small">Customers can tick <strong>Repeat every week</strong> at checkout. Every Monday at 6 AM, their order for that week is created as pending, so you still approve each one. Meals that are off the menu or sold out are left out. Manage plans under <a href="#customers" data-action="goto" data-to="customers">Customers</a>.</p>
+        <button class="btn ${on ? "btn-ghost" : ""}" type="button" data-action="plans-toggle">${on ? "Stop offering weekly plans" : "Offer weekly plans"}</button>
+      </section>`;
+  }
+
   function pendingCount() {
     return db ? db.orders.filter((o) => o.status === "pending").length : 0;
   }
@@ -231,7 +385,7 @@
     if (!pendingOrders.length) return "";
     return `
       <section class="card inbox" style="margin-bottom:16px">
-        <div class="card-head"><h2>New online orders</h2><span class="badge late">${pendingOrders.length} waiting</span></div>
+        <div class="card-head"><h2>New orders to review</h2><span class="badge late">${pendingOrders.length} waiting</span></div>
         <p class="muted small" style="margin-top:-4px">Confirm to add an order to prep and deliveries. Remember to text the customer to let them know.</p>
         <div class="grid grid-cards">
         ${pendingOrders.map((o) => {
@@ -250,7 +404,7 @@
               <div class="price num">${money(t.total)}</div>
             </div>
             <ul class="inbox-items">${t.lines.map((l) => `<li><strong>${l.qty}×</strong> ${esc(l.name)}</li>`).join("")}</ul>
-            <div class="small" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">${fulfillmentBadges(o)} <span class="badge">${esc(PAYMENT_LABELS[o.paymentMethod] || "No payment method")}</span> <span class="badge">for ${longDate(L.weekSchedule(o.weekOf).deliveryDay)}</span></div>
+            <div class="small" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">${o.source === "plan" ? '<span class="badge plan-active">Weekly plan</span> ' : o.planId ? '<span class="badge plan-active">Starts a weekly plan</span> ' : ""}${fulfillmentBadges(o)} <span class="badge">${esc(PAYMENT_LABELS[o.paymentMethod] || "No payment method")}</span> <span class="badge">for ${longDate(L.weekSchedule(o.weekOf).deliveryDay)}</span>${addr ? " " + distanceBadge(addr) : ""}</div>
             ${addr ? `<div class="small"><span class="muted">Deliver to:</span> ${esc(addr)}</div>` : ""}
             ${addrDiffers ? `<div class="small warn-text">Different from the address on file (${esc(c.address)}).</div>` : ""}
             ${o.notes ? `<div class="small"><span class="muted">Notes:</span> ${esc(o.notes)}</div>` : ""}
@@ -936,7 +1090,7 @@
           <td><strong>${esc(c ? c.name : "Unknown")}</strong>${o.notes ? `<div class="muted small">${esc(o.notes)}</div>` : ""}</td>
           <td>${shortDate(o.createdOn)}</td>
           <td class="num">${t.mealCount}</td>
-          <td>${fulfillmentBadges(o)}${o.source === "online" ? ' <span class="badge online">Online</span>' : ""}</td>
+          <td>${fulfillmentBadges(o)}${o.source === "online" ? ' <span class="badge online">Online</span>' : o.source === "plan" ? ' <span class="badge plan-active">Plan</span>' : ""}</td>
           <td><button class="badge pay-toggle ${o.paid ? "paid" : ""}" data-action="toggle-paid" data-id="${o.id}" title="Click to mark ${o.paid ? "unpaid" : "paid"}">${o.paid ? "Paid" : "Unpaid"}${PAYMENT_LABELS[o.paymentMethod] ? ` · ${PAYMENT_LABELS[o.paymentMethod]}` : ""}</button></td>
           <td class="right num">${money(t.total)}</td>
           <td class="actions">
@@ -1015,9 +1169,12 @@
     menu() {
       const editing = ui.editMealId ? db.menu.find((m) => m.id === ui.editMealId) : null;
       const m = ui.mealDraft || (editing
-        ? { name: editing.name, price: editing.price, macros: editing.macros, ingText: editing.ingredients.map(L.formatIngredient).join("\n") }
-        : { name: "", price: "", macros: { cal: "", protein: "", carbs: "", fat: "" }, ingText: "" });
+        ? { name: editing.name, price: editing.price, macros: editing.macros, ingText: editing.ingredients.map(L.formatIngredient).join("\n"),
+            description: editing.description || "", allergens: editing.allergens || [], weeklyLimit: editing.weeklyLimit || "" }
+        : { name: "", price: "", macros: { cal: "", protein: "", carbs: "", fat: "" }, ingText: "", description: "", allergens: [], weeklyLimit: "" });
       const meals = activeMeals();
+      const sold = L.soldForWeek(db.orders, ui.weekOf);
+      const photoNow = ui.photoDraft === "remove" ? "" : ui.photoDraft ? ui.photoDraft.dataUrl : safePhoto(editing && editing.photo);
       const removed = db.menu.filter((x) => x.active === false);
 
       return `
@@ -1028,6 +1185,25 @@
             ${errorBox("meal")}
             <div class="field"><label for="m-name">Meal name</label><input type="text" id="m-name" name="name" value="${esc(m.name)}" placeholder="e.g. Honey Garlic Chicken" /></div>
             <div class="field"><label for="m-price">Price per meal ($)</label><input type="number" id="m-price" name="price" min="0" step="0.25" value="${esc(m.price)}" /></div>
+            <div class="field"><label for="m-desc">Description <span class="muted">(shown to customers)</span></label><textarea id="m-desc" name="description" maxlength="300" rows="2" placeholder="e.g. Honey garlic chicken thighs over jasmine rice with roasted broccoli">${esc(m.description || "")}</textarea></div>
+            <div class="field">
+              <span class="label-text">Photo</span>
+              <div class="photo-field">
+                <div class="photo-preview" id="m-photo-preview">${photoNow ? `<img src="${esc(photoNow)}" alt="" />` : `<span class="muted small">No photo</span>`}</div>
+                <div class="btn-row">
+                  <label class="btn btn-ghost btn-sm" for="m-photo" style="cursor:pointer">${photoNow ? "Change photo" : "Add photo"}</label>
+                  <input type="file" id="m-photo" accept="image/jpeg,image/png,image/webp" hidden />
+                  <button class="btn btn-ghost btn-sm" type="button" data-action="meal-photo-remove" ${photoNow ? "" : "hidden"}>Remove</button>
+                </div>
+              </div>
+              <span class="small muted">A bright, top-down photo works best. It's shrunk automatically before upload.</span>
+            </div>
+            <fieldset class="field allergen-field">
+              <legend class="label-text">Contains <span class="muted">(major allergens)</span></legend>
+              <div class="allergen-grid">${L.ALLERGENS.map(([k, lbl]) => `<label><input type="checkbox" name="allergen" value="${k}" ${(m.allergens || []).includes(k) ? "checked" : ""}/> ${lbl}</label>`).join("")}</div>
+            </fieldset>
+            <div class="field"><label for="m-limit">Max per week <span class="muted">(optional)</span></label><input type="number" id="m-limit" name="weeklyLimit" min="1" max="999" step="1" inputmode="numeric" value="${esc(m.weeklyLimit || "")}" placeholder="No limit" />
+              <span class="small muted">When this many are ordered for a week, customers see "Sold out".</span></div>
             <span class="label-text">Macros per meal</span>
             <div class="row" style="margin:4px 0 12px">
               ${[["cal", "Calories"], ["protein", "Protein (g)"], ["carbs", "Carbs (g)"], ["fat", "Fat (g)"]].map(([k, lbl]) => `
@@ -1048,8 +1224,12 @@
           <div class="grid grid-cards">
             ${meals.map((x) => `
               <article class="card meal-card">
+                ${safePhoto(x.photo) ? `<img class="meal-photo" src="${esc(safePhoto(x.photo))}" alt="" loading="lazy" />` : ""}
                 <div class="card-head"><h3>${esc(x.name)}</h3><span class="price">${money(x.price)}</span></div>
+                ${x.description ? `<p class="small muted" style="margin:0">${esc(x.description)}</p>` : ""}
                 ${macroChips(x.macros)}
+                ${(x.allergens || []).length ? `<div class="small"><span class="muted">Contains:</span> ${esc(allergenText(x.allergens))}</div>` : ""}
+                <div class="small ${x.weeklyLimit && (sold.get(x.id) || 0) >= x.weeklyLimit ? "warn-text" : "muted"}">${x.weeklyLimit ? `${sold.get(x.id) || 0} of ${x.weeklyLimit} ordered for week of ${shortDate(ui.weekOf)}${(sold.get(x.id) || 0) >= x.weeklyLimit ? " · sold out" : ""}` : `${sold.get(x.id) || 0} ordered for week of ${shortDate(ui.weekOf)}`}</div>
                 <ul>${x.ingredients.map((i) => `<li>${esc(L.formatIngredient(i))}</li>`).join("") || "<li>No ingredients listed</li>"}</ul>
                 <div class="btn-row">
                   <button class="btn btn-ghost btn-sm" data-action="edit-meal" data-id="${x.id}">Edit</button>
@@ -1074,6 +1254,7 @@
       const days = s.macroDays || 5;
 
       return `
+      ${plansCard()}
       <div class="split">
         <section class="card">
           <div class="card-head"><h2>${editing ? "Edit customer" : "Add a customer"}</h2></div>
@@ -1215,6 +1396,8 @@
         ${onlineOrderingCard()}
         ${alertsCard()}
         ${recallSettingsCard()}
+        ${deliveryAreaCard()}
+        ${plansSettingsCard()}
         <section class="card">
           <div class="card-head"><h2>Business &amp; pricing</h2></div>
           <form data-form="settings" novalidate>
@@ -1390,6 +1573,14 @@
     }, undoFn ? 6000 : 2800);
   }
 
+  function setPlanStatus(id, status, msg) {
+    const p = (db.plans || []).find((x) => x.id === id);
+    if (!p) return;
+    p.status = status;
+    render();
+    persist({ type: "upsert", kind: "meal_plans", row: p }).then((ok) => ok && toast(msg));
+  }
+
   // ---------- Render ----------
   function render() {
     if (!db) return;
@@ -1410,6 +1601,7 @@
     if (routeMap) { routeMap.remove(); routeMap = null; }
     $("#app").innerHTML = ui.onboarding ? onboardingView() : views[ui.tab]();
     if (ui.tab === "deliveries" && $("#route-map")) drawRouteMap();
+    if (ui.tab === "orders" && db.settings.kitchenGeo) fillDistances();
   }
 
   // ---------- Login & first-run screens (cloud mode) ----------
@@ -1460,6 +1652,7 @@
     ui.tab = tab;
     ui.errors = {};
     ui.mealDraft = null;
+    ui.photoDraft = null;
     ui.customerDraft = null;
     ui.confirming = null;
     if (location.hash.slice(1) !== tab) history.replaceState(null, "", `#${tab}`);
@@ -1512,8 +1705,27 @@
       });
     },
 
-    "edit-meal": (el) => { ui.editMealId = el.dataset.id; ui.mealDraft = null; ui.errors = {}; render(); $("#m-name").focus(); },
-    "cancel-meal": () => { ui.editMealId = null; ui.mealDraft = null; ui.errors = {}; render(); },
+    "edit-meal": (el) => { ui.editMealId = el.dataset.id; ui.mealDraft = null; ui.photoDraft = null; ui.errors = {}; render(); $("#m-name").focus(); },
+    "cancel-meal": () => { ui.editMealId = null; ui.mealDraft = null; ui.photoDraft = null; ui.errors = {}; render(); },
+    "meal-photo-remove": (el) => {
+      ui.photoDraft = "remove";
+      $("#m-photo-preview").innerHTML = '<span class="muted small">No photo</span>';
+      el.hidden = true;
+    },
+    "plan-pause": (el) => setPlanStatus(el.dataset.id, "paused", "Plan paused. No orders will be created until you resume it."),
+    "plan-resume": (el) => setPlanStatus(el.dataset.id, "active", "Plan resumed."),
+    "plan-cancel": (el) => {
+      const key = "plan-cancel:" + el.dataset.id;
+      if (ui.confirming !== key) { ui.confirming = key; render(); return; }
+      ui.confirming = null;
+      setPlanStatus(el.dataset.id, "cancelled", "Plan cancelled.");
+    },
+    "plans-toggle-cancelled": () => { ui.showCancelledPlans = !ui.showCancelledPlans; render(); },
+    "plans-toggle": () => {
+      db.settings = { ...db.settings, plansEnabled: db.settings.plansEnabled === false };
+      render();
+      persist({ type: "settings", settings: db.settings }).then((ok) => ok && toast(db.settings.plansEnabled ? "Customers can start weekly plans again." : "Weekly plans are no longer offered. Existing plans keep running until you pause or cancel them."));
+    },
     "remove-meal": (el) => {
       const meal = db.menu.find((m) => m.id === el.dataset.id);
       if (!meal) return;
@@ -1703,8 +1915,35 @@
       persist({ type: "upsert", kind: "orders", row: order });
     },
 
-    meal(form) {
+    async "delivery-area"(form) {
       const fd = new FormData(form);
+      const address = String(fd.get("kitchenAddress") || "").trim();
+      const radius = Number(fd.get("radius"));
+      const errs = [];
+      if (address.length < 5) errs.push("Enter your kitchen address, including the city.");
+      if (!(radius >= 1 && radius <= 100)) errs.push("Enter a delivery radius between 1 and 100 miles.");
+      if (errs.length) { ui.errors["delivery-area"] = errs; return render(); }
+      ui.errors["delivery-area"] = null;
+      let geo = db.settings.kitchenGeo;
+      if (!geo || address !== db.settings.kitchenAddress) {
+        ui.areaBusy = true; render();
+        try { geo = await geocodeThrottled(address); } catch (_) { geo = null; }
+        ui.areaBusy = false;
+        if (!geo) { ui.errors["delivery-area"] = ["Couldn't find that address on the map. Check the spelling and include the city and ZIP."]; return render(); }
+        geo = { lat: geo.lat, lng: geo.lng };
+      }
+      db.settings = { ...db.settings, kitchenAddress: address, kitchenGeo: geo, deliveryRadiusMiles: radius };
+      distances.clear();
+      render();
+      persist({ type: "settings", settings: db.settings }).then((ok) => ok && toast(`Delivery area saved: ${radius} miles from your kitchen.`));
+    },
+
+    async meal(form) {
+      const fd = new FormData(form);
+      const description = String(fd.get("description") || "").trim();
+      const allergens = fd.getAll("allergen").map(String).filter((k) => L.ALLERGEN_LABELS[k]);
+      const limitRaw = String(fd.get("weeklyLimit") || "").trim();
+      const weeklyLimit = limitRaw === "" ? null : Number(limitRaw);
       const lines = String(fd.get("ingredients") || "").split("\n").map((l) => l.trim()).filter(Boolean);
       const parsed = lines.map((l) => ({ line: l, ing: L.parseIngredientLine(l) }));
       const bad = parsed.filter((p) => !p.ing).map((p) => `Couldn't read ingredient "${p.line}" — start it with an amount, e.g. "1 cup rice".`);
@@ -1715,17 +1954,39 @@
         ingredients: parsed.filter((p) => p.ing).map((p) => p.ing),
       };
       const errs = [...L.validateMeal(meal), ...bad];
+      if (weeklyLimit !== null && !(Number.isInteger(weeklyLimit) && weeklyLimit >= 1 && weeklyLimit <= 999)) errs.push("Max per week must be a whole number from 1 to 999, or blank for no limit.");
+      if (description.length > 300) errs.push("Keep the description under 300 characters.");
       if (errs.length) {
         ui.errors.meal = errs;
-        ui.mealDraft = { name: fd.get("name"), price: fd.get("price"), macros: { cal: fd.get("cal"), protein: fd.get("protein"), carbs: fd.get("carbs"), fat: fd.get("fat") }, ingText: fd.get("ingredients") };
+        ui.mealDraft = { name: fd.get("name"), price: fd.get("price"), macros: { cal: fd.get("cal"), protein: fd.get("protein"), carbs: fd.get("carbs"), fat: fd.get("fat") }, ingText: fd.get("ingredients"), description, allergens, weeklyLimit: limitRaw };
         return render();
       }
+      Object.assign(meal, { description, allergens, weeklyLimit });
       let saved = ui.editMealId ? db.menu.find((m) => m.id === ui.editMealId) : null;
+      const mealId = saved ? saved.id : L.uid("meal");
+      const oldPhoto = saved ? saved.photo || "" : "";
+      meal.photo = oldPhoto;
+      if (ui.photoDraft === "remove") meal.photo = "";
+      else if (ui.photoDraft) {
+        if (store && store.mode === "cloud" && store.uploadMealPhoto) {
+          const btn = form.querySelector('button[type="submit"]');
+          if (btn) { btn.disabled = true; btn.textContent = "Uploading photo…"; }
+          try {
+            meal.photo = await store.uploadMealPhoto(mealId, ui.photoDraft.blob);
+          } catch (err) {
+            toast(`Photo didn't upload (${err.message}). Saved without it.`);
+          }
+        } else {
+          meal.photo = ui.photoDraft.small || ui.photoDraft.dataUrl; // browser-only mode: a small copy kept in this browser
+        }
+      }
+      if (oldPhoto && oldPhoto !== meal.photo && store && store.deleteMealPhoto) store.deleteMealPhoto(oldPhoto);
+      ui.photoDraft = null;
       if (saved) {
         Object.assign(saved, meal);
         toast(`${meal.name} updated.`);
       } else {
-        saved = { id: L.uid("meal"), active: true, ...meal };
+        saved = { id: mealId, active: true, ...meal };
         db.menu.push(saved);
         toast(`${meal.name} added to the menu.`);
       }
@@ -1846,7 +2107,23 @@
     $("#order-preview").innerHTML = orderPreview();
   });
 
-  document.addEventListener("change", (e) => {
+  document.addEventListener("change", async (e) => {
+    if (e.target.id === "m-photo" && e.target.files[0]) {
+      const file = e.target.files[0];
+      e.target.value = "";
+      try {
+        const big = await resizeImage(file, 1000, 0.82);
+        const small = store && store.mode === "cloud" ? null : (await resizeImage(file, 480, 0.72)).dataUrl;
+        ui.photoDraft = { ...big, small };
+        const prev = $("#m-photo-preview");
+        if (prev) prev.innerHTML = `<img src="${big.dataUrl}" alt="" />`;
+        const rm = document.querySelector('[data-action="meal-photo-remove"]');
+        if (rm) rm.hidden = false;
+      } catch (err) {
+        toast(err.message);
+      }
+      return;
+    }
     if (e.target.matches("[data-check]")) {
       const k = e.target.dataset.check;
       if (e.target.checked) ui.checked.add(k); else ui.checked.delete(k);
@@ -1892,6 +2169,7 @@
       showLogin(`Couldn't load your data: ${err.message}`);
       return;
     }
+    db.plans = db.plans || [];
     ui.weekOf = L.orderWindow(today(), db.settings).weekOf;
     ui.shopSlug = store.getShop ? await store.getShop().catch(() => "") : "";
     ui.onboarding = S.isEmpty(db) && !db.settingsSaved;
@@ -1923,6 +2201,7 @@
     } catch (_) {
       db = seed(); // storage blocked (private window) — still usable, just not saved
     }
+    db.plans = db.plans || [];
     ui.user = null;
     ui.onboarding = false;
     ui.weekOf = L.orderWindow(today(), db.settings).weekOf;

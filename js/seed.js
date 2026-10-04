@@ -24,7 +24,11 @@
       cashApp: "",
       zelle: "",
       alertsEnabled: false,
-      recallChecks: true, // nightly FDA/USDA recall check against the menu (cloud mode)
+      recallChecks: true,
+      plansEnabled: true, // customers may tick "Repeat every week" at checkout
+      kitchenAddress: "",
+      kitchenGeo: null,
+      deliveryRadiusMiles: null, // nightly FDA/USDA recall check against the menu (cloud mode)
       ntfyTopic: "",
       managerUrl: "",
     };
@@ -36,6 +40,10 @@
     const menu = [
       {
         id: "meal_chicken_rice",
+        description: "Garlic-herb chicken breast over jasmine rice with roasted broccoli.",
+        allergens: [],
+        photo: "",
+        weeklyLimit: null,
         name: "Garlic Chicken & Jasmine Rice",
         price: 12,
         macros: { cal: 540, protein: 48, carbs: 58, fat: 11 },
@@ -43,6 +51,10 @@
       },
       {
         id: "meal_turkey_bowl",
+        description: "Seasoned ground turkey, rice, black beans, fresh salsa and avocado.",
+        allergens: [],
+        photo: "",
+        weeklyLimit: null,
         name: "Turkey Taco Bowl",
         price: 12.5,
         macros: { cal: 610, protein: 44, carbs: 62, fat: 19 },
@@ -50,6 +62,10 @@
       },
       {
         id: "meal_steak_potato",
+        description: "Grilled sirloin with a roasted sweet potato and garlicky green beans.",
+        allergens: [],
+        photo: "",
+        weeklyLimit: 10,
         name: "Sirloin & Sweet Potato",
         price: 15,
         macros: { cal: 620, protein: 46, carbs: 52, fat: 22 },
@@ -57,6 +73,10 @@
       },
       {
         id: "meal_salmon",
+        description: "Lemon-pepper salmon on fluffy quinoa with roasted asparagus.",
+        allergens: ["fish"],
+        photo: "",
+        weeklyLimit: 12,
         name: "Lemon Salmon & Quinoa",
         price: 16,
         macros: { cal: 580, protein: 40, carbs: 45, fat: 24 },
@@ -64,6 +84,10 @@
       },
       {
         id: "meal_shrimp_pasta",
+        description: "Cajun shrimp tossed in a light alfredo with high-protein pasta and spinach.",
+        allergens: ["shellfish", "milk", "wheat"],
+        photo: "",
+        weeklyLimit: null,
         name: "Cajun Shrimp Pasta (lite)",
         price: 13.5,
         macros: { cal: 560, protein: 38, carbs: 66, fat: 14 },
@@ -71,6 +95,10 @@
       },
       {
         id: "meal_oats",
+        description: "Overnight oats with Greek yogurt, a scoop of protein and mixed berries.",
+        allergens: ["milk"],
+        photo: "",
+        weeklyLimit: null,
         name: "Protein Overnight Oats",
         price: 7,
         macros: { cal: 420, protein: 32, carbs: 50, fat: 10 },
@@ -121,7 +149,15 @@
     ];
     customers.push({ id: "cust_jordan", name: "Jordan Brooks", phone: "(281) 555-0188", address: "900 Gessner Rd, Houston TX", targets: { cal: 2400, protein: 180, carbs: 240, fat: 75 } });
 
-    return { version: 1, settings, menu, customers, orders };
+    // A weekly plan, so the plans list has something to show.
+    const plans = [{
+      id: "plan_demo01", customerId: "cust_maya", items: [{ mealId: "meal_chicken_rice", qty: 3 }, { mealId: "meal_salmon", qty: 2 }, { mealId: "meal_oats", qty: 5 }],
+      fulfillment: "delivery", paymentMethod: "zelle", notes: "Leave at front door", status: "active", skipWeeks: [], lastWeek: weekOf, startedFrom: "ord_1001",
+      contact: { name: "Maya Johnson", phone: "(713) 555-0142", phoneDigits: "7135550142", address: "4410 Westheimer Rd, Houston TX" },
+    }];
+    orders[0].planId = "plan_demo01";
+
+    return { version: 1, settings, menu, customers, orders, plans };
   }
 
   root.FuelSeed = { buildDemoData, defaultSettings };

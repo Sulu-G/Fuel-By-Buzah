@@ -47,6 +47,10 @@ Spreadsheets got messy fast, so I built a tool that follows this cycle directly.
 |---|---|---|
 | ![Order page](docs/screenshot-shop-mobile.png) | ![Confirmation](docs/screenshot-shop-confirm.png) | ![Inbox](docs/screenshot-inbox.png) |
 
+| Track my order + weekly plan |
+|---|
+| ![Track order](docs/screenshot-track.png) |
+
 - **Shareable link.** Each shop gets `order.html?shop=<name>`, with an open/closed switch in Settings.
 - **Easy quantities.** Customers tap + / −, type a number, or pick one from a quick menu (1–30).
 - **Customers see macros as they shop.** Totals and per-day averages are shown, and customers can enter daily goals to compare against. Those goals fill in their macro targets in the manager.
@@ -58,6 +62,11 @@ Spreadsheets got messy fast, so I built a tool that follows this cycle directly.
 - **Installable app.** Both pages can be added to a phone's home screen with the lion icon (web app manifest + service worker). The ordering app reopens the customer's shop, and the pages still open offline. Chrome shows an *Install* button, and iPhone users get Add to Home Screen instructions.
 - **Returning customers are matched by phone number**, whatever the formatting. A public form can never overwrite a customer's saved details; it only fills in blanks.
 - **Phone alerts.** Every new online order pushes a notification to the owner's phone through the free [ntfy](https://ntfy.sh) app, e.g. *"New order: Keisha · 3 meals · $51.00 · delivery Sun, Oct 4"*. Tapping it opens the manager's Orders tab.
+- **Meal photos, descriptions and allergens.** Photos are shrunk in the browser and uploaded to a public Supabase Storage bucket, and each owner can only write to their own folder. Customers see a *Contains:* line for the 9 major allergens, a *What's in it* list (ingredient names, not amounts), and can hide meals with allergens they avoid. The page remembers that choice.
+- **Weekly limits ("Only 3 left", "Sold out").** Set a max per week on any meal. The ordering page shows what's left, and the database enforces it with row locks, so two customers can't both buy the last one. Declined orders free their meals back up.
+- **Track my order.** Customers enter their phone number plus the 6-character order code to see whether the order is waiting, confirmed or paid, with a Cash App button if it's unpaid. The code alone isn't enough, and tracking never shows names or addresses.
+- **Weekly meal plans.** At checkout a customer can tick *Repeat this order every week*. Every Monday at 6 AM Central (`pg_cron`), that week's order is created as **pending** for the owner to approve. Meals that are off the menu or sold out are left out, and the owner gets one push summary. Customers can skip a week, pause or cancel from the tracking page, and the owner is alerted. The owner can pause or cancel any plan from the Customers tab.
+- **Delivery-area check.** Set your kitchen address and a radius in Settings. New delivery orders show their distance and are flagged *Outside area* in the inbox, so you decide. The kitchen address is only stored in your account and is never sent to customers.
 - **Try it:** open `order.html?demo` for a demo that sends nothing.
 
 ### How phone alerts work (`supabase/v3_order_alerts.sql`)
@@ -147,7 +156,7 @@ How it works:
 
 To use your own Supabase project:
 
-1. Run the files in `supabase/` in order (`schema.sql`, `v2_…`, `v3_…`, `v4_…`, `v5_recall_checks.sql`, `v5_recall_schedule.sql`) in the Supabase SQL Editor. All of them are safe to re-run.
+1. Run the files in `supabase/` in order (`schema.sql`, `v2_…`, `v3_…`, `v4_…`, `v5_recall_checks.sql`, `v5_recall_schedule.sql`, `v6_customer_features.sql`, `v6_schedule.sql`) in the Supabase SQL Editor. All of them are safe to re-run.
 2. Create your login under **Authentication → Users → Add user**, then turn off public sign-ups.
 3. Put your project URL and **publishable** key in `js/config.js`. Never use a secret or service-role key there.
 
@@ -200,6 +209,8 @@ supabase/v3_order_alerts.sql      Push alerts for new orders (trigger + pg_net +
 supabase/v4_route_geo.sql         Saved map coordinates for customers
 supabase/v5_recall_checks.sql     Nightly FDA/USDA recall check: download, match, alerts, push
 supabase/v5_recall_schedule.sql   pg_cron schedule (8 PM Central nightly)
+supabase/v6_customer_features.sql Meal photos/allergens/limits, order tracking, weekly meal plans
+supabase/v6_schedule.sql          pg_cron schedule (Mondays 6 AM Central: weekly plan orders)
 tests/                Unit tests (node --test)
 ```
 

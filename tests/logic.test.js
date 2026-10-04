@@ -172,3 +172,30 @@ test("delivery sheet uses the address typed on an online order", () => {
   assert.equal(sheet.delivery[0].address, "9 New Rd");
   assert.equal(sheet.delivery[0].phone, "555");
 });
+
+test("v6: sold for week counts pending + confirmed only", () => {
+  const L = require("../js/logic.js");
+  const o = (weekOf, status, items) => ({ weekOf, status, items });
+  const sold = L.soldForWeek([
+    o("2026-10-05", "confirmed", [{ mealId: "m1", qty: 3 }, { mealId: "m2", qty: 1 }]),
+    o("2026-10-05", "pending", [{ mealId: "m1", qty: 2 }]),
+    o("2026-10-05", "declined", [{ mealId: "m1", qty: 9 }]),
+    o("2026-10-12", "confirmed", [{ mealId: "m1", qty: 9 }]),
+    { weekOf: "2026-10-05", items: [{ mealId: "m2", qty: 4 }] }, // v1 orders have no status → confirmed
+  ], "2026-10-05");
+  assert.equal(sold.get("m1"), 5);
+  assert.equal(sold.get("m2"), 5);
+  assert.equal(L.ALLERGENS.length, 9);
+  assert.equal(L.ALLERGEN_LABELS.tree_nuts, "Tree nuts");
+});
+
+test("v6: next plan week matches the database rule", () => {
+  const L = require("../js/logic.js");
+  const plan = { status: "active", lastWeek: "2026-10-05", skipWeeks: [] };
+  assert.equal(L.planNextWeek(plan, "2026-10-07", false), "2026-10-12"); // Wednesday → next Monday
+  assert.equal(L.planNextWeek({ ...plan, lastWeek: "2026-09-28" }, "2026-10-05", true), "2026-10-05"); // Monday before 6 AM
+  assert.equal(L.planNextWeek({ ...plan, lastWeek: "2026-09-28" }, "2026-10-05", false), "2026-10-12"); // Monday after 6 AM
+  assert.equal(L.planNextWeek({ ...plan, lastWeek: "2026-10-12" }, "2026-10-07", false), "2026-10-19"); // ordered ahead
+  assert.equal(L.planNextWeek({ ...plan, skipWeeks: ["2026-10-12", "2026-10-19"] }, "2026-10-07", false), "2026-10-26");
+  assert.equal(L.planNextWeek({ ...plan, status: "paused" }, "2026-10-07", false), null);
+});

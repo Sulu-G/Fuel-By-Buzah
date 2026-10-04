@@ -35,6 +35,10 @@
       macros: m.macros || {},
       ingredients: m.ingredients || [],
       active: m.active !== false,
+      description: m.description || "",
+      allergens: m.allergens || [],
+      photo_url: m.photo || "",
+      weekly_limit: m.weeklyLimit > 0 ? Math.round(m.weeklyLimit) : null,
     }),
     customers: (c) => ({
       id: c.id,
@@ -59,6 +63,21 @@
       paid: !!o.paid,
       quoted_total: o.quotedTotal == null ? null : o.quotedTotal,
       contact: o.contact || {},
+      plan_id: o.planId || null,
+    }),
+    meal_plans: (p) => ({
+      id: p.id,
+      customer_id: p.customerId,
+      items: p.items || [],
+      fulfillment: p.fulfillment,
+      payment_method: p.paymentMethod || "",
+      notes: p.notes || "",
+      contact: p.contact || {},
+      status: p.status || "active",
+      skip_weeks: p.skipWeeks || [],
+      last_week: p.lastWeek || null,
+      started_from: p.startedFrom || null,
+      updated_at: new Date().toISOString(),
     }),
   };
 
@@ -70,6 +89,10 @@
       macros: r.macros || {},
       ingredients: r.ingredients || [],
       active: r.active !== false,
+      description: r.description || "",
+      allergens: r.allergens || [],
+      photo: r.photo_url || "",
+      weeklyLimit: r.weekly_limit == null ? null : Number(r.weekly_limit),
     }),
     customers: (r) => ({
       id: r.id,
@@ -94,6 +117,21 @@
       paid: !!r.paid,
       quotedTotal: r.quoted_total == null ? null : Number(r.quoted_total),
       contact: r.contact || {},
+      ...(r.plan_id ? { planId: r.plan_id } : {}),
+    }),
+    meal_plans: (r) => ({
+      id: r.id,
+      customerId: r.customer_id,
+      items: r.items || [],
+      fulfillment: r.fulfillment,
+      paymentMethod: r.payment_method || "",
+      notes: r.notes || "",
+      contact: r.contact || {},
+      status: r.status || "active",
+      skipWeeks: (r.skip_weeks || []).map((d) => String(d).slice(0, 10)),
+      lastWeek: r.last_week ? String(r.last_week).slice(0, 10) : null,
+      startedFrom: r.started_from || null,
+      createdAt: r.created_at || null,
     }),
   };
 
@@ -101,7 +139,7 @@
     return !!(d && typeof d === "object" && d.settings && Array.isArray(d.menu) && Array.isArray(d.customers) && Array.isArray(d.orders));
   }
 
-  const dbKey = (kind) => (kind === "meals" ? "menu" : kind);
+  const dbKey = (kind) => (kind === "meals" ? "menu" : kind === "meal_plans" ? "plans" : kind);
 
   function isEmpty(db) {
     return !db.menu.length && !db.customers.length && !db.orders.length;
@@ -205,11 +243,12 @@
       },
 
       async loadAll() {
-        const [s, m, c, o] = await Promise.all([
+        const [s, m, c, o, p] = await Promise.all([
           sb.from("settings").select("data").maybeSingle(),
           sb.from("meals").select("*").order("created_at"),
           sb.from("customers").select("*").order("created_at"),
           sb.from("orders").select("*").order("created_on"),
+          Promise.resolve(sb.from("meal_plans").select("*").order("created_at")).catch((error) => ({ error })),
         ]);
         [s, m, c, o].forEach(check);
         return {
@@ -219,6 +258,8 @@
           menu: m.data.map(fromRow.meals),
           customers: c.data.map(fromRow.customers),
           orders: o.data.map(fromRow.orders),
+          // Weekly plans need v6 in the database; without it the app still works.
+          plans: p.error ? [] : (p.data || []).map(fromRow.meal_plans),
         };
       },
 
@@ -240,6 +281,7 @@
           if (op.db.menu.length) check(await sb.from("meals").insert(op.db.menu.map(toRow.meals)));
           if (op.db.customers.length) check(await sb.from("customers").insert(op.db.customers.map(toRow.customers)));
           if (op.db.orders.length) check(await sb.from("orders").insert(op.db.orders.map(toRow.orders)));
+          if ((op.db.plans || []).length) check(await sb.from("meal_plans").insert(op.db.plans.map(toRow.meal_plans)));
         }
       },
 
@@ -263,6 +305,23 @@
       async sendTestAlert() {
         const { error } = await sb.rpc("send_test_alert");
         if (error) throw new Error(error.message);
+      },
+
+      /** Uploads a (resized) meal photo to the public "meal-photos" bucket. Returns its URL. */
+      async uploadMealPhoto(mealId, blob) {
+        const uid = await userId();
+        if (!uid) throw new Error("Not signed in.");
+        const ext = blob.type === "image/webp" ? "webp" : "jpg";
+        const path = `${uid}/${String(mealId).replace(/[^\w-]/g, "")}-${Date.now()}.${ext}`;
+        const up = await sb.storage.from("meal-photos").upload(path, blob, { contentType: blob.type, upsert: false, cacheControl: "31536000" });
+        if (up.error) throw new Error(up.error.message);
+        return sb.storage.from("meal-photos").getPublicUrl(path).data.publicUrl;
+      },
+
+      /** Best-effort cleanup of a photo that was replaced or removed. */
+      async deleteMealPhoto(url) {
+        const m = String(url || "").match(/\/meal-photos\/(.+)$/);
+        if (m) await sb.storage.from("meal-photos").remove([decodeURIComponent(m[1])]).catch(() => {});
       },
 
       // ----- Food recall checks (filled in nightly by the database; see supabase/v5) -----
@@ -298,7 +357,7 @@
       subscribe(onChange) {
         if (channel) sb.removeChannel(channel);
         channel = sb.channel("fuel-db");
-        for (const table of ["settings", ...KINDS]) {
+        for (const table of ["settings", ...KINDS, "meal_plans"]) {
           channel.on("postgres_changes", { event: "*", schema: "public", table }, () => onChange());
         }
         channel.subscribe();

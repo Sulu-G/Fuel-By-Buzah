@@ -64,3 +64,18 @@ test("v1 rows (before online ordering) get safe defaults", () => {
   assert.equal(row.status, "confirmed");
   assert.equal(row.quoted_total, null);
 });
+
+test("v6: meal details and weekly plans map both ways", () => {
+  const S = require("../js/store.js");
+  const meal = { id: "m1", name: "Chicken", price: 12, macros: {}, ingredients: [], active: true, description: "Garlic chicken", allergens: ["milk"], photo: "https://x/y.jpg", weeklyLimit: 15 };
+  const row = S.toRow.meals(meal);
+  assert.equal(row.photo_url, "https://x/y.jpg");
+  assert.equal(row.weekly_limit, 15);
+  assert.deepEqual(S.fromRow.meals({ ...row, price: "12.00" }), meal);
+  assert.equal(S.toRow.meals({ ...meal, weeklyLimit: "" }).weekly_limit, null);
+  assert.deepEqual(S.fromRow.meals({ id: "m2", name: "x", price: 1 }).allergens, []);
+  const plan = { id: "plan_1", customerId: "c1", items: [{ mealId: "m1", qty: 2 }], fulfillment: "pickup", paymentMethod: "cash", notes: "", contact: { name: "A" }, status: "paused", skipWeeks: ["2026-10-12"], lastWeek: "2026-10-05", startedFrom: "web_x" };
+  const back = S.fromRow.meal_plans({ ...S.toRow.meal_plans(plan), skip_weeks: ["2026-10-12"], last_week: "2026-10-05", created_at: null });
+  assert.deepEqual({ ...back, createdAt: undefined }, { ...plan, createdAt: undefined });
+  assert.equal(S.dbKey("meal_plans"), "plans");
+});

@@ -331,7 +331,45 @@
     return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
   }
 
+  // ---------- v6: allergens, weekly limits, weekly plans ----------
+
+  /** The 9 major US food allergens (FDA). Keys match the database check constraint. */
+  const ALLERGENS = [
+    ["milk", "Milk"], ["eggs", "Eggs"], ["fish", "Fish"], ["shellfish", "Shellfish"], ["tree_nuts", "Tree nuts"],
+    ["peanuts", "Peanuts"], ["wheat", "Wheat"], ["soy", "Soy"], ["sesame", "Sesame"],
+  ];
+  const ALLERGEN_LABELS = Object.fromEntries(ALLERGENS);
+
+  /** Meals already ordered for a week (pending + confirmed), as Map(mealId → qty). Same rule as the database. */
+  function soldForWeek(orders, weekOf) {
+    const sold = new Map();
+    for (const o of orders || []) {
+      if (o.weekOf !== weekOf || (o.status && o.status !== "pending" && o.status !== "confirmed")) continue;
+      for (const it of o.items || []) sold.set(it.mealId, (sold.get(it.mealId) || 0) + (Number(it.qty) || 0));
+    }
+    return sold;
+  }
+
+  /**
+   * The next week (Monday) a weekly plan will create an order for, or null if it isn't active.
+   * Plan orders are created Mondays at 6 AM, so before then this Monday is still ahead.
+   */
+  function planNextWeek(plan, todayStr, beforeMondayCutoff) {
+    if (!plan || plan.status !== "active") return null;
+    let w = weekStart(todayStr);
+    const isMonday = parseDate(todayStr).getDay() === 1;
+    if (!(isMonday && beforeMondayCutoff)) w = addDays(w, 7);
+    if (plan.lastWeek && w <= plan.lastWeek) w = addDays(plan.lastWeek, 7);
+    const skip = new Set(plan.skipWeeks || []);
+    while (skip.has(w)) w = addDays(w, 7);
+    return w;
+  }
+
   return {
+    ALLERGENS,
+    ALLERGEN_LABELS,
+    soldForWeek,
+    planNextWeek,
     MACRO_KEYS,
     DAY_NAMES,
     round2,
